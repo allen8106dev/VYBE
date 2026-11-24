@@ -403,6 +403,16 @@ class BrowserPlaybackService : MediaBrowserService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.action?.let { command(it) }; return START_NOT_STICKY
     }
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (dead) {
+            playing = false; musicQueue.clear(); pending = ""; pendingNavigation = false
+            handler.removeCallbacks(sleepAction); sleepUntil = 0; updateWake(false)
+            session.isActive = false; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+            mutablePlayer.value = BrowserPlayerState()
+        } else command("stop")
+        super.onTaskRemoved(rootIntent)
+        taskRemoved?.invoke(this)
+    }
     override fun onBind(intent: Intent): IBinder? = if(intent.action==SERVICE_INTERFACE)super.onBind(intent) else binder
     override fun onGetRoot(clientPackageName: String,clientUid: Int,rootHints: Bundle?): BrowserRoot? {
         val verified=packageManager.getPackagesForUid(clientUid)?.contains(clientPackageName)==true
@@ -432,6 +442,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         val latest get() = state.value
         var searchRequest: ((BrowserPlaybackService,String,Boolean)->Unit)? = null
         var songObserved: ((QueueSong)->Unit)? = null
+        var taskRemoved: ((BrowserPlaybackService)->Unit)? = null
         const val FIXTURE = "https://muse.invalid/lab"
         private const val CHANNEL = "browser_playback_lab"
         private const val OBSERVE = """(()=>{const m=(document.querySelector('video.html5-main-video')||document.querySelector('video,audio'));const a=document.querySelector('ytm-slim-owner-renderer img,ytm-video-owner-renderer img,#owner img');return JSON.stringify(m?{present:true,paused:m.paused,muted:m.muted,volume:m.volume,ended:m.ended,ready:m.readyState,position:Number.isFinite(m.currentTime)?m.currentTime:0,duration:Number.isFinite(m.duration)?m.duration:0,title:document.title,avatar:a?.src||'',adsRemoved:window.__vybeAdsRemoved||0,error:m.error?.code||0,health:window.__vybeHealth?.read(m)}:{present:false,title:document.title});})()"""

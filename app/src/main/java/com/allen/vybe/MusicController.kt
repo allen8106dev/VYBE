@@ -60,6 +60,11 @@ class MusicController(private val app: MuseApplication) {
     }
     init {
         BrowserPlaybackService.searchRequest={service,query,play -> search(query,play,service)}
+        BrowserPlaybackService.taskRemoved={service ->
+            searchJob?.cancel();mutableRequestedSearch.value=null;pending.clear()
+            if(mutableEngine.value===service)mutableEngine.value=null
+            if(binding){binding=false;app.unbindService(connection)}
+        }
         BrowserPlaybackService.songObserved={song ->
             if(song.id!=lastRecorded&&song.id!="fixture"){
                 lastRecorded=song.id
