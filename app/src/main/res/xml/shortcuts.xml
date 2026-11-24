@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="voice_search" android:enabled="true"
+        android:icon="@drawable/ic_voice_search" android:shortcutShortLabel="@string/shortcut_voice">
+        <intent android:action="com.allen.vybe.action.VOICE_SEARCH"
+            android:targetPackage="com.allen.vybe" android:targetClass="com.allen.vybe.MainActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="search_music" android:enabled="true"
+        android:icon="@drawable/ic_music_search" android:shortcutShortLabel="@string/shortcut_search">
+        <intent android:action="android.intent.action.SEARCH"
+            android:targetPackage="com.allen.vybe" android:targetClass="com.allen.vybe.MainActivity" />
+    </shortcut>
+    <!-- Search returns results; playback remains a separate MEDIA_PLAY_FROM_SEARCH request.
+         Google-side App Actions preview/deployment is required for Assistant discovery. -->
+    <capability android:name="actions.intent.GET_THING">
+        <intent android:action="android.intent.action.SEARCH"
+            android:targetPackage="com.allen.vybe" android:targetClass="com.allen.vybe.MainActivity">
+            <parameter android:name="thing.name" android:key="query" />
+        </intent>
+    </capability>
+</shortcuts>

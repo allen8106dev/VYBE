@@ -1,0 +1,12 @@
+{
+  "easylist.txt": {
+    "sha256": "2edd45a7ff09db63ee92162cae0111652242f854a5cd9eb379e11f2205808694",
+    "bytes": 2057191,
+    "source": "https://easylist.to/easylist/easylist.txt"
+  },
+  "easyprivacy.txt": {
+    "sha256": "6d5467f2f10975b5c7e62cc56ec242a2223d1adc0bde1d3977069ec5c2e1e403",
+    "bytes": 1521775,
+    "source": "https://easylist.to/easylist/easyprivacy.txt"
+  }
+}

@@ -1,0 +1,6 @@
+Pinned Maven artifact: io.github.mlm-games:adblock:0.1.3
+AAR SHA256: 8473059d1fb8d1407baff81cdbda12f14d0d655b4f0dd12236d5808d60c73018
+Wrapper source: https://github.com/mlm-games/adblock-rs-kt-wrapper/tree/f1d317da32c280bcd401e0f86fb606aedfd4c8dc
+Upstream engine: https://github.com/brave/adblock-rust
+The prebuilt library is consumed unmodified. Local Java adapter and lab integration are original.
+Source reproducibility and the complete transitive native licence inventory remain release gates.

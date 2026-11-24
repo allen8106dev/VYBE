@@ -1,0 +1,10 @@
+EasyList and EasyPrivacy, unmodified bundled snapshots.
+Attribution: The EasyList authors (https://easylist.to/).
+Used under Creative Commons Attribution-ShareAlike 3.0 Unported.
+Licence: https://creativecommons.org/licenses/by-sa/3.0/
+Licensing statement: https://easylist.to/pages/licence.html
+Original source: https://github.com/easylist/easylist
+Exact snapshot URLs, hashes and byte lengths are in assets/filters/PROVENANCE.json.
+No automatic update or Brave parity is claimed.
+The unused upstream AAR asset adblock/resources.json is overridden by an original
+empty resource inventory. This prototype does not ship that upstream scriptlet bundle.

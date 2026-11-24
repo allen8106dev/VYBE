@@ -1,0 +1,20 @@
+VYBE offline speech recognition
+
+Vosk Android API 0.3.75
+Copyright Alpha Cephei Inc. and Vosk contributors.
+Source: https://github.com/alphacep/vosk-api
+License: Apache License 2.0 (Vosk-Apache-2.0.txt).
+
+Unmodified speech model: vosk-model-small-en-us-0.15.zip
+Source: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+Model license: Apache License 2.0, as listed at https://alphacephei.com/vosk/models
+Downloaded 2026-11-24; archive size 41,205,931 bytes.
+SHA-256: 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498
+
+JNA 5.18.1, used under its Apache License 2.0 option.
+Copyright JNA contributors.
+Source: https://github.com/java-native-access/jna/tree/5.18.1
+Upstream notices/licenses are also included in the dependency artifacts.
+
+This model recognizes English locally. Speech is not saved or uploaded by the
+Hey Music service. Song search sends the recognized title/artist text to YouTube.

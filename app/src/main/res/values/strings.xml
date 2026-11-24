@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">VYBE</string>
+    <string name="shortcut_search">Search music</string>
+    <string name="shortcut_voice">Voice search</string>
+</resources>
