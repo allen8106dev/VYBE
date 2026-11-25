@@ -36,22 +36,24 @@ fun SearchScreen(vm: MuseViewModel,play: (Track)->Unit,add: (Track)->Unit,openCh
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         item {PageTitle("Search","A song, an artist, a whole new mood.")}
         item {
-            OutlinedTextField(query,{query=it.take(200)},Modifier.fillMaxWidth(),shape=RoundedCornerShape(18.dp),placeholder={Text("Search songs or artists")},leadingIcon={Icon(Icons.Rounded.Search,null)},trailingIcon={Row {
+            OutlinedTextField(query,{value->query=value.take(200);vm.searchAsYouType(query)},Modifier.fillMaxWidth(),shape=RoundedCornerShape(18.dp),placeholder={Text("Search songs or artists")},leadingIcon={Icon(Icons.Rounded.Search,null)},trailingIcon={Row {
                 ActionIcon(Icons.Rounded.Mic,"Find and play a song by voice",click=onVoice)
                 ActionIcon(Icons.AutoMirrored.Rounded.ArrowForward,"Submit search",enabled=query.isNotBlank(),click=::submit)
             }},singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={submit()}))
-            if(state.submitted)Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Songs","Channels").forEach {name->FilterChip(filter==name,{filter=name},label={Text(name)})}}
+            if(state.submitted||state.tracks.isNotEmpty()||state.channels.isNotEmpty())Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Songs","Channels").forEach {name->FilterChip(filter==name,{filter=name},label={Text(name)})}}
         }
         if(!account.connected)item {
             Card(onClick=onAccount,colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) {Column(Modifier.fillMaxWidth().padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Connect to discover more",fontWeight=FontWeight.Bold);Text("Connect your YouTube account to search for songs and artists.",color=Muted);Text("Open Settings",color=MaterialTheme.colorScheme.primary)}}
         }
-        if(!state.submitted&&recent.isNotEmpty()) {
+        if(!state.submitted&&query.isBlank()&&recent.isNotEmpty()) {
             item{SectionTitle("Recent searches")}
             items(recent,key={"recent-$it"}){term->ListItem(headlineContent={Text(term)},leadingContent={Icon(Icons.Rounded.History,null,tint=Muted)},trailingContent={Icon(Icons.AutoMirrored.Rounded.ArrowForward,null)},modifier=Modifier.clickable{query=term;vm.search(term)},colors=ListItemDefaults.colors(containerColor=Color.Transparent))}
         }
+        if(!state.submitted&&query.trim().length==1)item{Text("Type one more character to see results.",Modifier.padding(vertical=8.dp),color=Muted)}
         if(state.loading)item{LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical=12.dp))}
         state.error?.let {error->item{EmptyState("Couldn't search",error,Icons.Rounded.CloudOff);TextButton(onClick=::submit){Text("Try again")}}}
         if(state.submitted&&!state.loading&&state.error==null&&state.tracks.isEmpty()&&state.channels.isEmpty())item{EmptyState("No songs found","Try another title or artist.",Icons.Rounded.Search)}
+        if(!state.submitted&&account.connected&&query.trim().length>=2&&!state.loading&&state.error==null&&state.tracks.isEmpty()&&state.channels.isEmpty())item{EmptyState("No matches yet","Try another title or artist.",Icons.Rounded.Search)}
         if(filter=="Songs")items(state.tracks,key={it.id}){track->SavedTrackRow(vm,track,{play(track)},{add(track)})}
         if(filter=="Channels")items(state.channels,key={it.id}){channel->ListItem(headlineContent={Text(channel.title)},supportingContent={Text("View channel on YouTube")},leadingContent={Icon(Icons.Rounded.AccountCircle,null)},modifier=Modifier.clickable{openChannel(channel.id)},colors=ListItemDefaults.colors(containerColor=Color.Transparent))}
         if(state.next!=null)item{OutlinedButton(onClick={vm.search(state.query,more=true)},enabled=!state.loading,modifier=Modifier.fillMaxWidth()){Text("More results")}}

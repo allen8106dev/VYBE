@@ -2,6 +2,7 @@ package com.allen.vybe
 
 import android.app.Application
 import android.app.PendingIntent
+import android.os.SystemClock
 import com.google.android.gms.auth.api.identity.*
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.common.api.ApiException
@@ -60,6 +61,10 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private var searchJob: Job? = null
+    private var searchGeneration = 0L
+    private var musicSearchGeneration = 0L
+    private var lastLiveSearchAt = 0L
+    private val searchCache = linkedMapOf<String, SearchPage>()
     private var playlistJob: Job? = null
     private var cloudJob: Job? = null
     private var operationJob: Job? = null
@@ -69,12 +74,14 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
     fun authFailed(cause: Throwable? = null) { mutableAccount.value = AccountState(error = authorizationErrorMessage((cause as? ApiException)?.statusCode)) }
     fun connect(token: String?) {
         if (token.isNullOrBlank()) { authFailed(); return }
+        searchGeneration++; searchJob?.cancel(); searchCache.clear()
         app.youtube.connect(token); mutableAccount.value = AccountState(connected = true); refreshCloud()
     }
     fun disconnect(): String? {
         music.disconnect()
         authorizationJob?.cancel(); pendingAuthorization.value = null
-        searchJob?.cancel(); playlistJob?.cancel(); cloudJob?.cancel(); operationJob?.cancel()
+        searchGeneration++; searchJob?.cancel(); playlistJob?.cancel(); cloudJob?.cancel(); operationJob?.cancel()
+        searchCache.clear()
         val token = app.youtube.disconnect()
         mutableAccount.value = AccountState(); mutableCloud.value = emptyList()
         mutableSearch.value = SearchState(); mutableBusy.value = false
@@ -106,17 +113,62 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
         val term = query.trim().take(200); if (term.isBlank()) return
         val previous = mutableSearch.value
         val page = if (more) previous.next ?: return else null
+        val cached = if (more) null else searchCache[term]
+        val request = ++searchGeneration
         searchJob?.cancel(); searchJob = viewModelScope.launch {
             mutableSearch.value = if (more) previous.copy(loading = true, error = null) else SearchState(term, loading = true, submitted = true)
             try {
+                if (request != searchGeneration) return@launch
                 app.preferences.recordSearch(term)
-                val result = app.youtube.search(term, page)
+                if (cached == null && !more) lastLiveSearchAt = SystemClock.elapsedRealtime()
+                val result = cached ?: app.youtube.search(term, page)
+                if (request != searchGeneration) return@launch
+                if (!more && cached == null) cacheSearch(term, result)
                 mutableSearch.value = SearchState(term, submitted = true, tracks = if (more) (previous.tracks + result.tracks).distinctBy { it.id } else result.tracks,
                     channels = if (more) (previous.channels + result.channels).distinctBy { it.id } else result.channels, next = result.next)
-            } catch (e: Exception) { val message = error(e); mutableSearch.value = mutableSearch.value.copy(loading = false, error = message, submitted = true) }
+            } catch (e: Exception) {
+                if (request != searchGeneration) return@launch
+                val message = error(e); mutableSearch.value = mutableSearch.value.copy(loading = false, error = message, submitted = true)
+            }
         }
     }
-    fun resetSearch() { searchJob?.cancel(); mutableSearch.value = SearchState() }
+    fun searchAsYouType(query: String) {
+        val raw = query.take(200)
+        val term = raw.trim()
+        val request = ++searchGeneration
+        searchJob?.cancel()
+        if (term.length < 2 || !app.youtube.connected) {
+            if (!app.youtube.connected) searchCache.clear()
+            mutableSearch.value = SearchState(query = raw)
+            return
+        }
+        searchCache[term]?.let { cached ->
+            mutableSearch.value = SearchState(query = raw, tracks = cached.tracks, channels = cached.channels, next = cached.next)
+            return
+        }
+        searchJob = viewModelScope.launch {
+            mutableSearch.value = SearchState(query = raw, loading = true)
+            val throttle = if (lastLiveSearchAt == 0L) 0L else (2500L - (SystemClock.elapsedRealtime() - lastLiveSearchAt)).coerceAtLeast(0L)
+            delay(maxOf(500L, throttle))
+            if (request != searchGeneration) return@launch
+            try {
+                lastLiveSearchAt = SystemClock.elapsedRealtime()
+                val result = app.youtube.search(term)
+                if (request != searchGeneration) return@launch
+                cacheSearch(term, result)
+                mutableSearch.value = SearchState(query = raw, tracks = result.tracks, channels = result.channels, next = result.next)
+            } catch (e: Exception) {
+                if (request != searchGeneration) return@launch
+                val message = error(e)
+                mutableSearch.value = SearchState(query = raw, error = message)
+            }
+        }
+    }
+    private fun cacheSearch(query: String, result: SearchPage) {
+        searchCache[query] = result
+        while (searchCache.size > 8) searchCache.remove(searchCache.keys.first())
+    }
+    fun resetSearch() { searchGeneration++; searchJob?.cancel(); mutableSearch.value = SearchState() }
     fun select(id: String, cloud: Boolean) {
         playlistJob?.cancel()
         playlistJob = viewModelScope.launch {
@@ -207,8 +259,8 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
     fun play(tracks: List<Track>, index: Int = 0, shuffle: Boolean = false) { music.play(tracks,index,shuffle) }
     init {
         viewModelScope.launch { music.requestedSearch.filterNotNull().collect { result ->
-            if(result.loading)searchJob?.cancel()
-            mutableSearch.value=result
+            if(result.loading){searchGeneration++;musicSearchGeneration=searchGeneration;searchJob?.cancel();lastLiveSearchAt=SystemClock.elapsedRealtime()}
+            if(result.loading||musicSearchGeneration==searchGeneration)mutableSearch.value=result
             if(app.youtube.connected&&!mutableAccount.value.connected)mutableAccount.value=AccountState(connected=true)
         } }
         authorizationJob=viewModelScope.launch {
