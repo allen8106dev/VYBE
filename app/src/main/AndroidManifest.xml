@@ -29,6 +29,7 @@
             android:name=".MainActivity"
             android:launchMode="singleTop"
             android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.VYBE"
             android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
