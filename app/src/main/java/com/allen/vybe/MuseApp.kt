@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.allen.vybe.browser.BrowserPlaybackService
 import com.allen.vybe.designsystem.*
 import com.allen.vybe.domain.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -125,8 +126,14 @@ fun HomeScreen(vm: MuseViewModel,settings: ()->Unit,search: (String)->Unit,play:
     val liked by vm.likedSongs.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
     val recommendations by vm.music.recommendations.collectAsStateWithLifecycle()
-    LaunchedEffect(account.connected, recent.firstOrNull()?.id, liked.firstOrNull()?.id) {
-        if(account.connected)vm.music.refreshRecommendations(recent.firstOrNull() ?: liked.firstOrNull())
+    val queueActive by remember {
+        BrowserPlaybackService.state.map { it.videoId.isNotBlank() }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue=BrowserPlaybackService.latest.videoId.isNotBlank())
+    LaunchedEffect(account.connected, recent.firstOrNull()?.id, liked.firstOrNull()?.id, queueActive) {
+        // Give the user time to start playback, and don't start discovery traffic while a queue is active.
+        delay(5000)
+        if(account.connected && !queueActive)
+            vm.music.refreshRecommendations(recent.firstOrNull() ?: liked.firstOrNull())
     }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         item {

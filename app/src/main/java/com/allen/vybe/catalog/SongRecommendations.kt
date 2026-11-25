@@ -21,19 +21,34 @@ class SongRecommendations(
         val key=seed?.let(RecommendationPolicy::query).orEmpty()
         val now=clock()
         val cached=cache[key]
-        if(!refresh && cached!=null && now-cached.first<30*60*1000L)
-            return@withLock RecommendationPolicy.select(cached.second,excluded)
-        // Protect search quota and leave bandwidth to the playing song.
+        var tracks: List<Track>
+        var fetchedArtistResults=false
         val stamp=generation
-        if(lastRequest!=0L) {
-            val remaining=30000-(now-lastRequest)
-            if(remaining>0)pause(remaining)
+        suspend fun requestSlot(): Boolean {
+            // Keep discovery off the path needed to start or continue a song.
+            if(lastRequest!=0L) {
+                val remaining=30000-(clock()-lastRequest)
+                if(remaining>0)pause(remaining)
+            }
+            if(stamp!=generation)return false
+            lastRequest=clock()
+            return true
         }
-        if(stamp!=generation)return@withLock emptyList()
-        lastRequest=clock()
-        val tracks=load(seed)
-        if(stamp!=generation)return@withLock emptyList()
-        cache[key]=now to tracks
+        if(!refresh && cached!=null && now-cached.first<30*60*1000L) {
+            tracks=cached.second
+        } else {
+            if(!requestSlot())return@withLock emptyList()
+            tracks=load(seed)
+            if(stamp!=generation)return@withLock emptyList()
+            fetchedArtistResults=seed!=null
+        }
+        // Avoid the broad chart request unless every artist result is already excluded.
+        if(seed!=null && RecommendationPolicy.select(tracks,excluded).isEmpty()) {
+            if(!fetchedArtistResults&&!requestSlot())return@withLock emptyList()
+            tracks=tracks+load(null)
+            if(stamp!=generation)return@withLock emptyList()
+        }
+        cache[key]=clock() to tracks
         while(cache.size>12)cache.remove(cache.keys.first())
         RecommendationPolicy.select(tracks,excluded)
     }

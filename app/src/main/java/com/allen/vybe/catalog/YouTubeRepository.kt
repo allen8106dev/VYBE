@@ -104,12 +104,7 @@ class YouTubeRepository : MusicCatalogProvider, MusicSearchService, PlaylistRepo
             if(seconds !in 60..900 || snippet.optString("liveBroadcastContent","none")!="none" || item.optJSONObject("status")?.optBoolean("embeddable")!=true)return@mapNotNull null
             Track(id,clean(snippet.optString("title")),clean(snippet.optString("channelTitle")),artworkUri=thumbnail(snippet),channelId=snippet.optString("channelId"))
         }
-        // Keep a discovery fallback when an artist's top results are already in the playlist.
-        // The whole bounded batch is cached; this chart call costs one API quota unit.
-        val discovery=if(seed==null)emptyList() else try { recommendations(null) }
-            catch(cancelled: kotlinx.coroutines.CancellationException){throw cancelled}
-            catch(_: Exception){emptyList()}
-        return (tracks+discovery).distinctBy { it.id }.take(40)
+        return tracks.distinctBy { it.id }.take(20)
     }
     private suspend fun withChannelImages(tracks: List<Track>): List<Track> {
         val images = mutableMapOf<String, String?>()

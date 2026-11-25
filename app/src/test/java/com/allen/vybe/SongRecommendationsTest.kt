@@ -13,12 +13,21 @@ class SongRecommendationsTest {
     @Test fun homeAndAutoplayShareOneRequestAndExcludeAlreadyQueuedSongs() = runBlocking {
         var calls=0
         val gate=CompletableDeferred<Unit>()
-        val source=SongRecommendations({calls++;gate.await();listOf(seed,fresh)},{1000L})
+        val discovery=Track("video000003","Discovery song","New artist")
+        val source=SongRecommendations({calls++;gate.await();listOf(seed,fresh,discovery)},{1000L})
         val home=async { source.songs(seed,listOf(seed)) }
         val autoplay=async { source.songs(seed,listOf(seed,fresh)) }
         yield();gate.complete(Unit)
-        assertEquals(listOf(fresh),home.await());assertTrue(autoplay.await().isEmpty())
+        assertEquals(listOf(fresh,discovery),home.await());assertEquals(listOf(discovery),autoplay.await())
         assertEquals(1,calls)
+    }
+    @Test fun chartFallbackLoadsOnlyWhenArtistResultsAreAlreadyExcluded() = runBlocking {
+        var calls=0;var time=1000L
+        val discovery=Track("video000003","Discovery song","New artist")
+        val source=SongRecommendations({seedTrack->calls++;if(seedTrack==null)listOf(discovery) else listOf(seed,fresh)},{time},{wait->time+=wait})
+        assertEquals(listOf(discovery),source.songs(seed,listOf(seed,fresh)))
+        assertEquals(listOf(fresh,discovery),source.songs(seed,listOf(seed)))
+        assertEquals(2,calls)
     }
     @Test fun rapidNewArtistRequestsAreThrottledWithoutInvalidatingCachedSongs() = runBlocking {
         var time=1000L;var calls=0

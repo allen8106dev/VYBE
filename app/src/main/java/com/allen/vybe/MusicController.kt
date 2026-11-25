@@ -95,15 +95,15 @@ class MusicController(private val app: MuseApplication) {
         scope.launch { autoplay.collect { enabled -> mutableEngine.value?.autoplay(enabled) } }
         scope.launch {
             val seeds=BrowserPlaybackService.state.map {
-                AutoplaySeed(it.videoId,it.songs,it.index,it.repeat,it.duration>0)
+                AutoplaySeed(it.videoId,it.songs,it.index,it.repeat,it.duration>0,it.playing)
             }.distinctUntilChanged()
             combine(engine,seeds,autoplay) { service,seed,enabled -> Triple(service,seed,enabled) }.collectLatest { (service,seed,enabled) ->
-                if(service==null || !enabled || seed.id=="fixture" || !seed.ready || seed.index!=seed.songs.lastIndex || seed.repeat!=0 || seed.id.isBlank())return@collectLatest
+                if(service==null || !enabled || seed.id=="fixture" || !seed.ready || !seed.playing || seed.index!=seed.songs.lastIndex || seed.repeat!=0 || seed.id.isBlank())return@collectLatest
                 val version=service.queueVersion
                 try {
-                    // Let track startup and artwork requests settle before discovery work.
-                    delay(1500)
-                    if(!app.youtube.connected)return@collectLatest
+                    // Let playback establish itself before discovery uses the network.
+                    delay(15000)
+                    if(service.queueVersion!=version || !service.snapshot.playing || !app.youtube.connected)return@collectLatest
                     val current=seed.songs.getOrNull(seed.index)?.track() ?: return@collectLatest
                     val recent=app.database.library().recentSongs().first().map { it.track() }
                     val tracks=suggestionSource.songs(current,recent+seed.songs.map { it.track() })
@@ -152,6 +152,7 @@ class MusicController(private val app: MuseApplication) {
     fun play(tracks: List<Track>,index: Int=0,shuffle: Boolean=false) {
         val valid=tracks.filter { it.source==Source.YOUTUBE&&it.available&&it.id.matches(Regex("[A-Za-z0-9_-]{11}")) }
         if(valid.isEmpty())return
+        recommendationsJob?.cancel()
         lastRecorded=""
         val wanted=tracks.getOrNull(index)?.id
         val ordered=if(shuffle)valid.shuffled() else valid
@@ -236,4 +237,4 @@ class MusicController(private val app: MuseApplication) {
 fun QueueSong.track()=Track(id,title,artist,Source.YOUTUBE,artworkUri=youtubeArtwork(id),artistArtworkUri=artistImage.ifBlank { null })
 
 data class RecommendationState(val tracks: List<Track> = emptyList(),val loading: Boolean=false,val message: String?=null)
-private data class AutoplaySeed(val id: String,val songs: List<QueueSong>,val index: Int,val repeat: Int,val ready: Boolean)
+private data class AutoplaySeed(val id: String,val songs: List<QueueSong>,val index: Int,val repeat: Int,val ready: Boolean,val playing: Boolean)
