@@ -54,11 +54,18 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var lastNotification = ""
     private var pauseCause = "none"
     private var dead = false
+    private var browserNeedsReload = false
+    private var lastRecoveryAt = 0L
+    private var restorePosition: Long? = null
+    private var restorePlaying = false
+    private var wantsPlayback = false
+    private var interactiveHost = true
     @Volatile private var page = ""
     private var generation = 0
     private var evaluating = false
     private var evaluationId = 0L
     private var evaluationStarted = 0L
+    private var observationTimeouts = 0
     private val musicQueue = MusicQueue()
     private val queue get() = musicQueue.ids
     private val index get() = musicQueue.index
@@ -100,10 +107,14 @@ class BrowserPlaybackService : MediaBrowserService() {
     }
     fun reportError(message: String?) { playbackError=message;publish() }
     fun prepareSongs(songs: List<QueueSong>) {
+        wantsPlayback = false; restorePosition = null
         script("m.pause();");updateWake(false);generation++;evaluationId++;evaluating=false
         musicQueue.replace(songs,0);prepared=true;playing=false;lastPosition=0;duration=0;observedAt=SystemClock.elapsedRealtime();publish()
     }
-    fun seek(position: Long) { if(duration > 0) script("m.currentTime=${position.coerceIn(0, duration) / 1000.0};") }
+    fun seek(position: Long) {
+        if (restorePosition != null) restorePosition = position.coerceAtLeast(0)
+        else if(duration > 0) script("m.currentTime=${position.coerceIn(0, duration) / 1000.0};")
+    }
 
     private var pending = ""
     private var pendingAt = 0L
@@ -115,22 +126,25 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var wakeRenewedAt = 0L
     private var health = ""
     fun hostVisible(parent: FrameLayout, visible: Boolean) { if(web.parent === parent) uiVisible = visible }
+    fun ownsHost(parent: FrameLayout): Boolean = !dead && web.parent === parent
     private val poll = object : Runnable {
         override fun run() {
             if (dead) return
-            if(queue.isEmpty()||prepared) { handler.postDelayed(this, 1000); return }
+            if(queue.isEmpty()||prepared||browserNeedsReload) { handler.postDelayed(this, 1000); return }
             if (evaluating && SystemClock.elapsedRealtime() - evaluationStarted > 5000) {
                 evaluating = false; playing = false
                 observed = "Browser observation timed out; playback state unknown"
                 publish()
+                observationTimeouts++
+                if (observationTimeouts >= 2) recoverBrowser()
             }
-            if (!evaluating) {
+            if (!evaluating && !browserNeedsReload) {
                 evaluating = true; evaluationStarted = SystemClock.elapsedRealtime()
                 val stamp = generation
                 val requestId = ++evaluationId
                 web.evaluateJavascript(OBSERVE) { raw ->
                     if (!dead && stamp == generation && requestId == evaluationId) {
-                        evaluating = false; observe(raw)
+                        evaluating = false; observationTimeouts = 0; observe(raw)
                     }
                 }
             }
@@ -156,7 +170,7 @@ class BrowserPlaybackService : MediaBrowserService() {
                 override fun onSkipToNext() = command("next")
                 override fun onSkipToPrevious() = command("previous")
                 override fun onStop() = command("stop")
-                override fun onSeekTo(pos: Long) { script("m.currentTime=${pos.coerceAtLeast(0) / 1000.0};") }
+                override fun onSeekTo(pos: Long) { seek(pos) }
             }, handler)
             isActive = true
         }
@@ -164,6 +178,28 @@ class BrowserPlaybackService : MediaBrowserService() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Music playback", NotificationManager.IMPORTANCE_LOW))
         startForeground(440, notification())
         wrapper = MutableContextWrapper(this)
+        createBrowser()
+        worker.execute {
+            filter.initialize()
+            val loaded = runCatching {
+                val rules = listOf("filters/easylist.txt", "filters/easyprivacy.txt").joinToString("\n") { name ->
+                    assets.open(name).bufferedReader().use { it.readText() }.also { check(it.length <= 8 * 1024 * 1024) }
+                }
+                browserFilter.initialize(rules)
+                check(browserFilter.status == "Rust JNI ready")
+            }.isSuccess
+            handler.post {
+                if(!dead) {
+                    filtersReady = loaded && filter.status == "Rust JNI ready"
+                    if(filtersReady && pendingNavigation) navigate()
+                    else if(!filtersReady) { observed = "Filtering unavailable; browser navigation withheld"; publish() }
+                }
+            }
+        }
+        handler.post(poll)
+    }
+
+    private fun createBrowser() {
         // Experimental: keep Chromium's window visibility notification active when the
         // native music surface leaves the foreground. This is not Brave's WebContents patch.
         web = object : WebView(wrapper) {
@@ -239,33 +275,47 @@ class BrowserPlaybackService : MediaBrowserService() {
                 if (request.isForMainFrame) { observed = "WebView error ${error.errorCode}"; publish() }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                dead = true; playing = false; observed = "Renderer exited; close and reopen lab"; publish(); stopSelf(); return true
+                if (!dead && view === web) recoverBrowser()
+                return true
             }
         }
-        worker.execute {
-            filter.initialize()
-            val loaded = runCatching {
-                val rules = listOf("filters/easylist.txt", "filters/easyprivacy.txt").joinToString("\n") { name ->
-                    assets.open(name).bufferedReader().use { it.readText() }.also { check(it.length <= 8 * 1024 * 1024) }
-                }
-                browserFilter.initialize(rules)
-                check(browserFilter.status == "Rust JNI ready")
-            }.isSuccess
-            handler.post {
-                if(!dead) {
-                    filtersReady = loaded && filter.status == "Rust JNI ready"
-                    if(filtersReady && pendingNavigation) navigate()
-                    else if(!filtersReady) { observed = "Filtering unavailable; browser navigation withheld"; publish() }
-                }
+    }
+
+    /** Replace only the failed browser. The bound service, queue, filters and poll survive. */
+    private fun recoverBrowser() {
+        val parent = web.parent as? FrameLayout
+        val position = restorePosition ?: lastPosition
+        val resume = wantsPlayback
+        generation++; evaluationId++; evaluating = false; observedAt = 0; observationTimeouts = 0
+        playing = false; pending = ""; updateWake(false)
+        parent?.removeView(web)
+        web.destroy()
+        createBrowser()
+        if (parent != null) attach(parent, wrapper.baseContext, interactiveHost)
+        browserNeedsReload = true
+        val now = SystemClock.elapsedRealtime()
+        // A repeatedly crashing page must not cause a reload loop or battery drain.
+        if (lastRecoveryAt == 0L || now - lastRecoveryAt >= 60000) {
+            lastRecoveryAt = now
+            if (queue.isNotEmpty() && !prepared) {
+                navigate(resume)
+                restorePosition = position; restorePlaying = resume; wantsPlayback = resume
             }
+        } else {
+            restorePosition = null; pendingNavigation = false
+            playbackError = "Playback was interrupted. Tap Play to try again, or choose another song."
+            observed = "Browser recovery paused after repeated renderer exits"
+            publish()
         }
-        handler.post(poll)
     }
     private fun allowed(uri: Uri): Boolean = uri.scheme == "https" && uri.userInfo == null && uri.port in listOf(-1, 443)
     fun attach(parent: FrameLayout, context: Context, interactive: Boolean = true) {
+        if (dead) return
+        interactiveHost = interactive
         (web.parent as? ViewGroup)?.removeView(web); wrapper.baseContext = context
         web.setOnTouchListener { _, _ -> !interactive }
         web.importantForAccessibility = if(interactive) android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        parent.removeAllViews()
         parent.addView(web, FrameLayout.LayoutParams(-1, -1)); web.onResume()
     }
     fun detach(parent: FrameLayout) { if(web.parent === parent) { parent.removeView(web); wrapper.baseContext = this } }
@@ -276,10 +326,11 @@ class BrowserPlaybackService : MediaBrowserService() {
         musicQueue.replace(valid.mapIndexed { n,id -> QueueSong(id,names.getOrNull(n)?.take(200).orEmpty().ifBlank { "YouTube song ${n+1}" },creators.getOrNull(n)?.take(150).orEmpty(),creatorImages.getOrNull(n)?.take(2048).orEmpty()) },selected)
         playbackError=null;prepared=false;navigate()
     }
-    private fun navigate() {
+    private fun navigate(autoplay: Boolean = true) {
         if (dead || queue.isEmpty()) return
         if (!filtersReady) { pendingNavigation = true; observed = "Preparing enforced browser filters"; publish(); return }
         pendingNavigation = false
+        browserNeedsReload = false; restorePosition = null; wantsPlayback = autoplay; observationTimeouts = 0
         handledEnd=false;prepared=false;playbackError=null
         pending = ""; playing = false
         // Invalidate immediately: onPageStarted arrives later, after callers can inspect state.
@@ -287,12 +338,13 @@ class BrowserPlaybackService : MediaBrowserService() {
         pageTitle = ""; duration = 0; artistImage = artistImages.getOrNull(index).orEmpty(); unmuteOnStart = true
         observed = "Loading"; publish()
         val id = queue[index]
-        web.loadUrl(if (id == "fixture") FIXTURE else "https://m.youtube.com/watch?v=$id&autoplay=1")
+        web.loadUrl(if (id == "fixture") FIXTURE else "https://m.youtube.com/watch?v=$id&autoplay=${if(autoplay) 1 else 0}")
     }
     fun command(command: String) {
         if (dead) return
         when(command) {
             "stop" -> {
+                wantsPlayback = false; restorePosition = null; browserNeedsReload = false
                 script("m.pause();"); web.stopLoading(); musicQueue.clear(); playing = false; pending = ""; pendingNavigation = false
                 handler.removeCallbacks(sleepAction);sleepUntil=0
                 unmuteOnStart = false; generation++; evaluationId++; evaluating = false; observedAt = 0; lastPosition = 0; duration = 0
@@ -306,12 +358,14 @@ class BrowserPlaybackService : MediaBrowserService() {
             "shuffle" -> { musicQueue.toggleShuffle();publish();return }
             "repeat" -> { musicQueue.setRepeat((musicQueue.repeat+1)%3);publish();return }
             "play" -> {
+                wantsPlayback = true
+                if (restorePosition != null) restorePlaying = true
                 if(queue.isEmpty()){reportError("Choose a song in VYBE to start listening.");return}
                 session.isActive=true;startForeground(440,notification())
-                if(prepared){navigate();return}
+                if(prepared || browserNeedsReload){navigate();return}
                 script("m.muted=false;m.volume=1;m.play().catch(()=>{});")
             }
-            "pause" -> { script("m.pause();"); updateWake(false) }
+            "pause" -> { wantsPlayback = false; if(restorePosition != null) restorePlaying = false; script("m.pause();"); updateWake(false) }
             else -> return
         }
         pending = command; pendingAt = SystemClock.elapsedRealtime(); publish()
@@ -333,6 +387,15 @@ class BrowserPlaybackService : MediaBrowserService() {
             val value = JSONTokener(raw).nextValue()
             val data = JSONObject(value as? String ?: "{}")
             val present = data.optBoolean("present")
+            restorePosition?.let { position ->
+                if (present && data.optInt("ready") >= 1) {
+                    val seconds = position.coerceAtLeast(0) / 1000.0
+                    script("m.currentTime=Math.min($seconds,Number.isFinite(m.duration)?Math.max(0,m.duration-0.1):$seconds);" +
+                        if (restorePlaying) "m.muted=false;m.volume=1;m.play().catch(()=>{});" else "m.pause();")
+                    restorePosition = null
+                    return
+                }
+            }
             val avatar = data.optString("avatar")
             if (Uri.parse(avatar).let { it.scheme == "https" && it.host == "yt3.ggpht.com" || it.scheme == "https" && it.host == "yt3.googleusercontent.com" }) artistImage = avatar
             if (present && unmuteOnStart && data.optInt("ready") >= 2 && !data.optBoolean("paused", true)) {
@@ -428,6 +491,7 @@ class BrowserPlaybackService : MediaBrowserService() {
     }
     override fun onDestroy() {
         dead = true; mutablePlayer.value = BrowserPlayerState(); handler.removeCallbacksAndMessages(null)
+        destroyed?.invoke(this)
         updateWake(false)
         session.isActive = false; session.release()
         (web.parent as? ViewGroup)?.removeView(web); web.stopLoading(); web.destroy()
@@ -443,6 +507,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         var searchRequest: ((BrowserPlaybackService,String,Boolean)->Unit)? = null
         var songObserved: ((QueueSong)->Unit)? = null
         var taskRemoved: ((BrowserPlaybackService)->Unit)? = null
+        var destroyed: ((BrowserPlaybackService)->Unit)? = null
         const val FIXTURE = "https://muse.invalid/lab"
         private const val CHANNEL = "browser_playback_lab"
         private const val OBSERVE = """(()=>{const m=(document.querySelector('video.html5-main-video')||document.querySelector('video,audio'));const a=document.querySelector('ytm-slim-owner-renderer img,ytm-video-owner-renderer img,#owner img');return JSON.stringify(m?{present:true,paused:m.paused,muted:m.muted,volume:m.volume,ended:m.ended,ready:m.readyState,position:Number.isFinite(m.currentTime)?m.currentTime:0,duration:Number.isFinite(m.duration)?m.duration:0,title:document.title,avatar:a?.src||'',adsRemoved:window.__vybeAdsRemoved||0,error:m.error?.code||0,health:window.__vybeHealth?.read(m)}:{present:false,title:document.title});})()"""

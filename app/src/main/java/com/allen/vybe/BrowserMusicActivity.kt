@@ -73,16 +73,16 @@ fun BrowserEngineHost(engine: BrowserPlaybackService?) {
     val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(engine, owner, frame) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if(event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && frame.windowToken != null && frame.childCount == 0) engine?.attach(frame, context, interactive = false)
+            if(event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && frame.windowToken != null && engine?.ownsHost(frame) == false) engine.attach(frame, context, interactive = false)
             if(event == androidx.lifecycle.Lifecycle.Event.ON_START || event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) engine?.hostVisible(frame, true)
             if(event == androidx.lifecycle.Lifecycle.Event.ON_STOP) engine?.hostVisible(frame, false)
         }
         owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
+        onDispose { owner.lifecycle.removeObserver(observer); engine?.detach(frame) }
     }
     AndroidView(factory = { frame }, update = { container ->
         engine?.let { service ->
-            if(container.childCount == 0) service.attach(container, context, interactive = false)
+            if(!service.ownsHost(container)) service.attach(container, context, interactive = false)
             service.hostVisible(container, owner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
         }
     }, onRelease = { container -> engine?.detach(container) }, modifier = Modifier.size(1.dp).clip(androidx.compose.ui.graphics.RectangleShape))

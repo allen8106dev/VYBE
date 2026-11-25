@@ -56,7 +56,19 @@ class MusicController(private val app: MuseApplication) {
             service.playerActivity(MainActivity::class.java);mutableEngine.value=service
             val work=pending.toList();pending.clear();work.forEach { it(service) }
         }
-        override fun onServiceDisconnected(name: ComponentName) { mutableEngine.value=null;binding=false }
+        // Android retains this binding and reconnects it after an unexpected process loss.
+        override fun onServiceDisconnected(name: ComponentName) { mutableEngine.value=null }
+        override fun onBindingDied(name: ComponentName) {
+            releaseEngine()
+            withEngine { }
+        }
+        override fun onNullBinding(name: ComponentName) {
+            releaseEngine();pending.clear();mutableMessage.value="Could not connect playback. Try again."
+        }
+    }
+    private fun releaseEngine() {
+        mutableEngine.value=null
+        if(binding){binding=false;app.unbindService(connection)}
     }
     init {
         BrowserPlaybackService.searchRequest={service,query,play -> search(query,play,service)}
@@ -64,6 +76,9 @@ class MusicController(private val app: MuseApplication) {
             searchJob?.cancel();mutableRequestedSearch.value=null;pending.clear()
             if(mutableEngine.value===service)mutableEngine.value=null
             if(binding){binding=false;app.unbindService(connection)}
+        }
+        BrowserPlaybackService.destroyed={service ->
+            if(mutableEngine.value===service)releaseEngine()
         }
         BrowserPlaybackService.songObserved={song ->
             if(song.id!=lastRecorded&&song.id!="fixture"){
