@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -29,14 +30,14 @@ fun SearchScreen(vm: MuseViewModel,play: (Track)->Unit,add: (Track)->Unit,openCh
     val state by vm.search.collectAsStateWithLifecycle()
     val recent by vm.recentSearches.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
-    var query by rememberSaveable {mutableStateOf(state.query)}
+    var query by remember(state.query) {mutableStateOf(state.query)}
     var filter by rememberSaveable {mutableStateOf("Songs")}
-    LaunchedEffect(state.query){if(state.query.isNotBlank())query=state.query}
+    var searchFocused by remember {mutableStateOf(false)}
     fun submit(){vm.search(query)}
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         item {PageTitle("Search","A song, an artist, a whole new mood.")}
         item {
-            OutlinedTextField(query,{value->query=value.take(200);vm.searchAsYouType(query)},Modifier.fillMaxWidth(),shape=RoundedCornerShape(18.dp),placeholder={Text("Search songs or artists")},leadingIcon={Icon(Icons.Rounded.Search,null)},trailingIcon={Row {
+            OutlinedTextField(query,{value->query=value.take(200);vm.searchAsYouType(query)},Modifier.fillMaxWidth().onFocusChanged{searchFocused=it.isFocused},shape=RoundedCornerShape(18.dp),placeholder={Text("Search songs or artists")},leadingIcon={Icon(Icons.Rounded.Search,null)},trailingIcon={Row {
                 ActionIcon(Icons.Rounded.Mic,"Find and play a song by voice",click=onVoice)
                 ActionIcon(Icons.AutoMirrored.Rounded.ArrowForward,"Submit search",enabled=query.isNotBlank(),click=::submit)
             }},singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={submit()}))
@@ -45,9 +46,15 @@ fun SearchScreen(vm: MuseViewModel,play: (Track)->Unit,add: (Track)->Unit,openCh
         if(!account.connected)item {
             Card(onClick=onAccount,colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) {Column(Modifier.fillMaxWidth().padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Connect to discover more",fontWeight=FontWeight.Bold);Text("Connect your YouTube account to search for songs and artists.",color=Muted);Text("Open Settings",color=MaterialTheme.colorScheme.primary)}}
         }
-        if(!state.submitted&&query.isBlank()&&recent.isNotEmpty()) {
+        if(searchFocused&&query.isBlank()&&recent.isNotEmpty()) {
             item{SectionTitle("Recent searches")}
-            items(recent,key={"recent-$it"}){term->ListItem(headlineContent={Text(term)},leadingContent={Icon(Icons.Rounded.History,null,tint=Muted)},trailingContent={Icon(Icons.AutoMirrored.Rounded.ArrowForward,null)},modifier=Modifier.clickable{query=term;vm.search(term)},colors=ListItemDefaults.colors(containerColor=Color.Transparent))}
+            items(recent,key={"recent-${it.id}"}){track->
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)){SavedTrackRow(vm,track,{play(track)},{add(track)})}
+                    ActionIcon(Icons.Rounded.Close,"Remove ${track.title} from recent searches"){vm.removeRecentSearch(track.id)}
+                }
+            }
+            item{TextButton(onClick=vm::clearRecentSearches,modifier=Modifier.fillMaxWidth()){Text("Clear recents")}}
         }
         if(!state.submitted&&query.trim().length==1)item{Text("Type one more character to see results.",Modifier.padding(vertical=8.dp),color=Muted)}
         if(state.loading)item{LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical=12.dp))}
@@ -61,14 +68,11 @@ fun SearchScreen(vm: MuseViewModel,play: (Track)->Unit,add: (Track)->Unit,openCh
 }
 
 @Composable
-fun LibraryScreen(vm: MuseViewModel,onOpen: (MusicPlaylist)->Unit,play: (Track)->Unit,add: (Track)->Unit,onSettings: ()->Unit) {
+fun LibraryScreen(vm: MuseViewModel,onOpen: (MusicPlaylist)->Unit,onOpenLiked: ()->Unit,onSettings: ()->Unit) {
     val local by vm.playlists.collectAsStateWithLifecycle()
     val cloud by vm.cloud.collectAsStateWithLifecycle()
     val liked by vm.likedSongs.collectAsStateWithLifecycle()
-    val recent by vm.recentSongs.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
-    val busy by vm.busy.collectAsStateWithLifecycle()
-    val tab by vm.libraryTab.collectAsStateWithLifecycle()
     var query by rememberSaveable{mutableStateOf("")}
     var newPlaylist by rememberSaveable{mutableStateOf(false)}
     var editingPlaylist by remember{mutableStateOf<MusicPlaylist?>(null)}
@@ -76,32 +80,49 @@ fun LibraryScreen(vm: MuseViewModel,onOpen: (MusicPlaylist)->Unit,play: (Track)-
     var alphabetical by rememberSaveable{mutableStateOf(true)}
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         item {PageTitle("Your library","Keep the songs that stay with you.",action={FilledTonalIconButton(onClick={newPlaylist=true}){Icon(Icons.Rounded.Add,"Create playlist")}})}
-        item {
-            Row(Modifier.fillMaxWidth().padding(vertical=10.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                CollectionTile("Liked songs",songCount(liked.size),Icons.Rounded.Favorite,Modifier.weight(1f)){vm.libraryTab.value="Liked songs"}
-                CollectionTile("Recently played",songCount(recent.size),Icons.Rounded.History,Modifier.weight(1f)){vm.libraryTab.value="Recent"}
-            }
-            OutlinedTextField(query,{query=it.take(150)},Modifier.fillMaxWidth().padding(vertical=8.dp),shape=RoundedCornerShape(18.dp),placeholder={Text("Search your library")},leadingIcon={Icon(Icons.Rounded.Search,null)},singleLine=true)
-            LazyRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){items(listOf("Playlists","Liked songs","Recent")){label->FilterChip(tab==label,{vm.libraryTab.value=label},label={Text(label)})}}
-        }
-        if(tab=="Playlists") {
-            item {Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("Your collections",Modifier.weight(1f),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold);ActionIcon(Icons.AutoMirrored.Rounded.Sort,if(alphabetical)"Sort Z to A" else "Sort A to Z"){alphabetical=!alphabetical};if(account.connected)ActionIcon(Icons.Rounded.Refresh,"Refresh YouTube playlists",enabled=!account.loading,click=vm::refreshCloud)}}
-            val lists=(local+cloud).filter{it.title.contains(query,true)}.let{if(alphabetical)it.sortedBy{p->p.title.lowercase()}else it.sortedByDescending{p->p.title.lowercase()}}
-            if(lists.isEmpty()&&!account.loading)item{EmptyState(if(query.isBlank())"Make it a playlist" else "No matching playlists",if(query.isBlank())"Create a collection for your favourites, late nights or next road trip." else "Try a different playlist name.",Icons.AutoMirrored.Rounded.QueueMusic);Button(onClick={newPlaylist=true},modifier=Modifier.fillMaxWidth()){Text("Create playlist")}}
-            items(lists,key={"${it.cloud}-${it.id}"}){playlist->PlaylistRow(playlist,{onOpen(playlist)}){PlaylistOverflow(vm,playlist,{editingPlaylist=playlist},{deletingPlaylist=playlist})}}
-            if(account.loading)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
-            account.error?.let{error->item{Text(error,color=MaterialTheme.colorScheme.error);TextButton(onClick=vm::refreshCloud){Text("Retry sync")}}}
-            if(!account.connected)item{OutlinedCard(onClick=onSettings,modifier=Modifier.fillMaxWidth().padding(top=12.dp)){Row(Modifier.padding(20.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Rounded.CloudQueue,null,tint=MaterialTheme.colorScheme.primary);Column(Modifier.weight(1f).padding(start=14.dp)){Text("Your YouTube playlists",fontWeight=FontWeight.SemiBold);Text("Connect your account to bring them here",color=Muted,style=MaterialTheme.typography.bodySmall)}}}}
-        } else {
-            val songs=(if(tab=="Liked songs")liked else recent).filter{it.title.contains(query,true)||it.artist.contains(query,true)}
-            if(songs.isNotEmpty())item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)){Button(onClick={vm.play(songs)},modifier=Modifier.weight(1f)){Icon(Icons.Rounded.PlayArrow,null);Text("Play all")};FilledTonalButton(onClick={vm.play(songs,shuffle=true)},modifier=Modifier.weight(1f)){Icon(Icons.Rounded.Shuffle,null);Text("Shuffle")}}}
-            if(songs.isEmpty())item{EmptyState(if(tab=="Liked songs")"A place for your favourites" else "Your next listen is waiting",if(tab=="Liked songs")"Like a song from its menu to save it here." else "Songs you play will appear here.",if(tab=="Liked songs")Icons.Rounded.FavoriteBorder else Icons.Rounded.History)}
-            items(songs,key={it.id}){track->SavedTrackRow(vm,track,{play(track)},{add(track)})}
-        }
+        if(query.isBlank()||"liked songs".contains(query.trim(),true))item{LikedSongsLibraryRow(liked.size,onOpenLiked)}
+        item{OutlinedTextField(query,{query=it.take(150)},Modifier.fillMaxWidth().padding(vertical=8.dp),shape=RoundedCornerShape(18.dp),placeholder={Text("Search your library")},leadingIcon={Icon(Icons.Rounded.Search,null)},singleLine=true,trailingIcon={if(query.isNotBlank())ActionIcon(Icons.Rounded.Close,"Clear library search"){query=""}})}
+        item {Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("Your playlists",Modifier.weight(1f),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold);ActionIcon(Icons.Rounded.Add,"Create playlist"){newPlaylist=true};ActionIcon(Icons.AutoMirrored.Rounded.Sort,if(alphabetical)"Sort Z to A" else "Sort A to Z"){alphabetical=!alphabetical};if(account.connected)ActionIcon(Icons.Rounded.Refresh,"Refresh YouTube playlists",enabled=!account.loading,click=vm::refreshCloud)}}
+        val lists=(local+cloud).filter{it.title.contains(query,true)}.let{if(alphabetical)it.sortedBy{p->p.title.lowercase()}else it.sortedByDescending{p->p.title.lowercase()}}
+        if(lists.isEmpty()&&!account.loading)item{EmptyState(if(query.isBlank())"Make it a playlist" else "No matching playlists",if(query.isBlank())"Create a collection for your favourites, late nights or next road trip." else "Try a different playlist name.",Icons.AutoMirrored.Rounded.QueueMusic);Button(onClick={newPlaylist=true},modifier=Modifier.fillMaxWidth()){Text("Create playlist")}}
+        items(lists,key={"${it.cloud}-${it.id}"}){playlist->PlaylistRow(playlist,{onOpen(playlist)}){PlaylistOverflow(vm,playlist,{editingPlaylist=playlist},{deletingPlaylist=playlist})}}
+        if(account.loading)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
+        account.error?.let{error->item{Text(error,color=MaterialTheme.colorScheme.error);TextButton(onClick=vm::refreshCloud){Text("Retry sync")}}}
+        if(!account.connected)item{OutlinedCard(onClick=onSettings,modifier=Modifier.fillMaxWidth().padding(top=12.dp)){Row(Modifier.padding(20.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Rounded.CloudQueue,null,tint=MaterialTheme.colorScheme.primary);Column(Modifier.weight(1f).padding(start=14.dp)){Text("Your YouTube playlists",fontWeight=FontWeight.SemiBold);Text("Connect your account to bring them here",color=Muted,style=MaterialTheme.typography.bodySmall)}}}}
     }
     editingPlaylist?.let{EditPlaylistDialog(vm,it){editingPlaylist=null}}
     deletingPlaylist?.let{DeletePlaylistDialog(vm,it,{deletingPlaylist=null})}
     if(newPlaylist)CreatePlaylistDialog(account.connected,{newPlaylist=false}){name,inCloud->vm.create(name,inCloud);newPlaylist=false}
+}
+
+@Composable
+fun LikedSongsLibraryRow(count: Int,open: ()->Unit) {
+    Surface(onClick=open,shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surfaceVariant,modifier=Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically) {
+            Box(Modifier.size(60.dp).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primaryContainer),contentAlignment=Alignment.Center) {
+                Icon(Icons.Rounded.Favorite,null,Modifier.size(26.dp),tint=MaterialTheme.colorScheme.primary)
+            }
+            Column(Modifier.weight(1f).padding(horizontal=16.dp)) {
+                Text("Liked songs",fontWeight=FontWeight.SemiBold)
+                Text("${songCount(count)} saved",style=MaterialTheme.typography.bodySmall,color=Muted)
+            }
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight,null,tint=Muted)
+        }
+    }
+}
+
+@Composable
+fun LikedSongsScreen(vm: MuseViewModel,back: ()->Unit,add: (Track)->Unit) {
+    val liked by vm.likedSongs.collectAsStateWithLifecycle()
+    var query by rememberSaveable{mutableStateOf("")}
+    val songs=remember(liked,query){liked.filter{it.title.contains(query,true)||it.artist.contains(query,true)}}
+    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        item{PageTitle("Liked songs", "${songCount(liked.size)} saved",back=back)}
+        item{OutlinedTextField(query,{query=it.take(150)},Modifier.fillMaxWidth(),shape=RoundedCornerShape(18.dp),placeholder={Text("Find a liked song")},leadingIcon={Icon(Icons.Rounded.Search,null)},singleLine=true,trailingIcon={if(query.isNotBlank())ActionIcon(Icons.Rounded.Close,"Clear liked songs search"){query=""}})}
+        if(songs.isNotEmpty())item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)){Button(onClick={vm.play(songs)},modifier=Modifier.weight(1f)){Icon(Icons.Rounded.PlayArrow,null);Text("Play all")};FilledTonalButton(onClick={vm.play(songs,shuffle=true)},modifier=Modifier.weight(1f)){Icon(Icons.Rounded.Shuffle,null);Text("Shuffle")}}}
+        if(songs.isEmpty())item{EmptyState(if(query.isBlank())"A place for your favourites" else "No matching songs",if(query.isBlank())"Like a song from its menu to save it here." else "Try another title or artist.",Icons.Rounded.FavoriteBorder)}
+        itemsIndexed(songs,key={index,track->"${track.id}-$index"}){index,track->SavedTrackRow(vm,track,{vm.play(songs,index)},{add(track)})}
+    }
 }
 
 @Composable

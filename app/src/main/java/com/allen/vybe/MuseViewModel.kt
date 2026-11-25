@@ -24,7 +24,6 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as MuseApplication
     private val dao = app.database.library()
     val music = app.music
-    val libraryTab=MutableStateFlow("Playlists")
     val playlists = combine(dao.observePlaylists(), dao.observeEntries()) { lists, entries -> lists.map { p -> MusicPlaylist(p.id, p.title, p.description, entries.count { it.playlistId == p.id }) } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val favourites = music.favourites
     val history = dao.history().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -119,7 +118,6 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
             mutableSearch.value = if (more) previous.copy(loading = true, error = null) else SearchState(term, loading = true, submitted = true)
             try {
                 if (request != searchGeneration) return@launch
-                app.preferences.recordSearch(term)
                 if (cached == null && !more) lastLiveSearchAt = SystemClock.elapsedRealtime()
                 val result = cached ?: app.youtube.search(term, page)
                 if (request != searchGeneration) return@launch
@@ -168,6 +166,9 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
         searchCache[query] = result
         while (searchCache.size > 8) searchCache.remove(searchCache.keys.first())
     }
+    fun recordRecentSearch(track: Track) { viewModelScope.launch { app.preferences.recordSearch(track) } }
+    fun removeRecentSearch(id: String) { viewModelScope.launch { app.preferences.removeRecentSearch(id) } }
+    fun clearRecentSearches() { viewModelScope.launch { app.preferences.clearSearches() } }
     fun resetSearch() { searchGeneration++; searchJob?.cancel(); mutableSearch.value = SearchState() }
     fun select(id: String, cloud: Boolean) {
         playlistJob?.cancel()

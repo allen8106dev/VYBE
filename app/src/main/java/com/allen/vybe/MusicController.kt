@@ -224,9 +224,9 @@ class MusicController(private val app: MuseApplication) {
                 val page=app.youtube.search(query)
                 val results=page.tracks.filter { it.available }
                 check(results.isNotEmpty()) { "No songs found for $query. Try another title or artist." }
-                app.preferences.recordSearch(query);app.database.library().saveSongs(results.map(SongEntity::from))
+                app.database.library().saveSongs(results.map(SongEntity::from))
                 mutableRequestedSearch.value=SearchState(query,submitted=true,tracks=results,channels=page.channels,next=page.next)
-                if(play)this@MusicController.play(results) else service?.prepareSongs(results.map { QueueSong(it.id,it.title,it.artist,it.artistArtworkUri.orEmpty()) })
+                if(play)this@MusicController.play(results.take(1)) else service?.prepareSongs(results.map { QueueSong(it.id,it.title,it.artist,it.artistArtworkUri.orEmpty()) })
             } catch(cancelled: CancellationException){throw cancelled}
             catch(error: Exception){ val message=error.message?:"Could not find that song. Try again.";mutableRequestedSearch.value=SearchState(query,submitted=true,error=message);service?.reportError(message);mutableMessage.value=message }
         }

@@ -52,9 +52,10 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
     var consent by rememberSaveable { mutableStateOf(false) }
     fun go(path: String) {
         if(path==route)return
+        if(route=="search")vm.resetSearch()
         screens=if(path in setOf("home","search","library"))listOf("home")+(if(path=="home")emptyList() else listOf(path)) else screens+path
     }
-    fun back(){screens=if(screens.size>1)screens.dropLast(1) else listOf("home")}
+    fun back(){if(route=="search")vm.resetSearch();screens=if(screens.size>1)screens.dropLast(1) else listOf("home")}
     BackHandler(screens.size>1){back()}
     fun open(url: String) { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW,url.toUri())) }.onFailure { vm.notify("No app can open this link.") } }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it);vm.clearMessage() } }
@@ -68,9 +69,14 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
     LaunchedEffect(incomingVoice){if(incomingVoice>handledVoice){handledVoice=incomingVoice;voiceSearch()}}
     LaunchedEffect(voiceNavigation){if(voiceNavigation.first>handledVoiceNavigation){handledVoiceNavigation=voiceNavigation.first;go(voiceNavigation.second)}}
     val play: (Track)->Unit={track ->
-        val candidates=when { route.startsWith("playlist/")->vm.selected.value.tracks;route=="search"->vm.search.value.tracks;else->listOf(track) }
-        val tracks=if(candidates.any { it.id==track.id })candidates else listOf(track)
-        vm.play(tracks,tracks.indexOfFirst { it.id==track.id }.coerceAtLeast(0))
+        if(route=="search") {
+            vm.recordRecentSearch(track)
+            vm.play(listOf(track))
+        } else {
+            val candidates=if(route.startsWith("playlist/"))vm.selected.value.tracks else listOf(track)
+            val tracks=if(candidates.any { it.id==track.id })candidates else listOf(track)
+            vm.play(tracks,tracks.indexOfFirst { it.id==track.id }.coerceAtLeast(0))
+        }
     }
     Box(Modifier.fillMaxSize()) {
         BrowserEngineHost(engine)
@@ -87,9 +93,10 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
             Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
             screenState.SaveableStateProvider(route) {
                 when {
-                    route=="home" -> HomeScreen(vm,{go("settings")},{query->if(query.isNotBlank())vm.search(query);go("search")},play,{options=it},{tab->vm.libraryTab.value=tab;go("library")},voiceSearch)
+                    route=="home" -> HomeScreen(vm,{go("settings")},{query->if(query.isNotBlank())vm.search(query);go("search")},play,{options=it},{tab->if(tab=="Liked songs")go("liked") else go("library")},voiceSearch)
                     route=="search" -> SearchScreen(vm,play,{options=it},{open("https://www.youtube.com/channel/$it")},{go("settings")},onVoice=voiceSearch)
-                    route=="library" -> LibraryScreen(vm,{go("playlist/${it.id}/${it.cloud}")},play,{options=it},{go("settings")})
+                    route=="library" -> LibraryScreen(vm,{go("playlist/${it.id}/${it.cloud}")},{go("liked")},{go("settings")})
+                    route=="liked" -> LikedSongsScreen(vm,::back,{options=it})
                     route.startsWith("playlist/") -> {
                         val parts=route.split('/')
                         LaunchedEffect(route) {vm.select(parts.getOrElse(1){""},parts.getOrElse(2){"false"}=="true")}
@@ -104,7 +111,9 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
             }
         }
     }
-    options?.let { track -> SongActions(vm,track,{options=null},{adding=track;options=null}) }
+    options?.let { track -> SongActions(vm,track,{options=null},{adding=track;options=null}) { selected ->
+        if(route=="search")play(selected) else vm.play(listOf(selected))
+    } }
     adding?.let { AddToPlaylistDialog(vm,it){adding=null} }
     if(consent)AlertDialog(onDismissRequest={consent=false},title={Text("Connect YouTube")},text={Text("Connect your Google account to search YouTube and manage your playlists. Your local likes and playlists stay on this phone. YouTube audio is streamed and is never downloaded. Google authorization and YouTube's terms apply.")},confirmButton={Button(onClick={consent=false;onConnect()}){Text("Continue with Google")}},dismissButton={TextButton(onClick={consent=false}){Text("Cancel")}})
 }
@@ -185,12 +194,12 @@ fun CollectionTile(title: String,subtitle: String,icon: androidx.compose.ui.grap
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SongActions(vm: MuseViewModel,track: Track,dismiss: ()->Unit,playlist: ()->Unit) {
+fun SongActions(vm: MuseViewModel,track: Track,dismiss: ()->Unit,playlist: ()->Unit,play: (Track)->Unit) {
     val liked by vm.favourites.collectAsStateWithLifecycle()
     val context=LocalContext.current
     ModalBottomSheet(onDismissRequest=dismiss) {
         Column(Modifier.padding(horizontal=20.dp).padding(bottom=28.dp)) {
-            TrackRow(track,{vm.play(listOf(track));dismiss()})
+            TrackRow(track,{play(track);dismiss()})
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             ActionRow(Icons.Rounded.PlayArrow,"Play next"){vm.music.enqueue(track,true);dismiss()}
             ActionRow(Icons.AutoMirrored.Rounded.QueueMusic,"Add to queue"){vm.music.enqueue(track);dismiss()}
