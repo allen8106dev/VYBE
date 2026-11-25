@@ -60,13 +60,12 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var restorePlaying = false
     private var wantsPlayback = false
     private var interactiveHost = true
-    private var backgroundObservationDeferred = false
     @Volatile private var page = ""
     private var generation = 0
     private var evaluating = false
     private var evaluationId = 0L
     private var evaluationStarted = 0L
-    private val observationRecovery = BrowserObservationRecovery()
+    private var observationTimeouts = 0
     private val musicQueue = MusicQueue()
     var queueVersion = 0L; private set
     private var autoplay = true
@@ -105,9 +104,7 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var pageTitle = ""
     private var duration = 0L
     private var playerActivity: Class<*> = BrowserPlaybackActivity::class.java
-    private val playbackObservationFresh: Boolean
-        get() = observedAt > 0 && (SystemClock.elapsedRealtime() - observedAt <= 5000 || (!uiVisible && wantsPlayback && playing))
-    val snapshot get() = BrowserPlayerState(queue.getOrNull(index).orEmpty(), titles.getOrNull(index)?.takeIf { it.isNotBlank() } ?: pageTitle.ifBlank { "YouTube playback" }, artists.getOrNull(index).orEmpty(), playing && playbackObservationFresh, lastPosition, duration, index, queue.size, diagnostics, musicQueue.names, artistImage, musicQueue.songs, musicQueue.shuffle, musicQueue.repeat, canAdvance, sleepUntil, playbackError)
+    val snapshot get() = BrowserPlayerState(queue.getOrNull(index).orEmpty(), titles.getOrNull(index)?.takeIf { it.isNotBlank() } ?: pageTitle.ifBlank { "YouTube playback" }, artists.getOrNull(index).orEmpty(), playing && observedAt > 0 && SystemClock.elapsedRealtime() - observedAt <= 5000, lastPosition, duration, index, queue.size, diagnostics, musicQueue.names, artistImage, musicQueue.songs, musicQueue.shuffle, musicQueue.repeat, canAdvance, sleepUntil, playbackError)
     fun playerActivity(activity: Class<*>) { playerActivity = activity }
     fun select(selected: Int) { if(musicQueue.select(selected)) navigate() }
     fun enqueue(song: QueueSong, next: Boolean = false) {
@@ -148,45 +145,26 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var wake: PowerManager.WakeLock? = null
     private var wakeRenewedAt = 0L
     private var health = ""
-    fun hostVisible(parent: FrameLayout, visible: Boolean) {
-        if(web.parent === parent) {
-            if(visible && !uiVisible) {
-                observationRecovery.becameVisible()
-                if(backgroundObservationDeferred) {
-                    backgroundObservationDeferred = false
-                    evaluating = false
-                    evaluationId++
-                    handler.removeCallbacks(poll)
-                    handler.post(poll)
-                }
-            }
-            uiVisible = visible
-        }
-    }
+    fun hostVisible(parent: FrameLayout, visible: Boolean) { if(web.parent === parent) uiVisible = visible }
     fun ownsHost(parent: FrameLayout): Boolean = !dead && web.parent === parent
     private val poll = object : Runnable {
         override fun run() {
             if (dead) return
             if(queue.isEmpty()||prepared||browserNeedsReload) { handler.postDelayed(this, 1000); return }
             if (evaluating && SystemClock.elapsedRealtime() - evaluationStarted > 5000) {
-                evaluating = false
-                if(!uiVisible) {
-                    // Do not keep queuing JavaScript onto a backgrounded renderer if its
-                    // callback is being throttled; resume observations when the host returns.
-                    backgroundObservationDeferred = true
-                    evaluationId++
-                }
-                observed = if(uiVisible) "Browser observation timed out; playback state unknown" else "Background observation delayed; retaining playback state"
+                evaluating = false; playing = false
+                observed = "Browser observation timed out; playback state unknown"
                 publish()
-                if(observationRecovery.timedOut(uiVisible)) recoverBrowser()
+                observationTimeouts++
+                if (observationTimeouts >= 2) recoverBrowser()
             }
-            if (!evaluating && !browserNeedsReload && !backgroundObservationDeferred) {
+            if (!evaluating && !browserNeedsReload) {
                 evaluating = true; evaluationStarted = SystemClock.elapsedRealtime()
                 val stamp = generation
                 val requestId = ++evaluationId
                 web.evaluateJavascript(OBSERVE) { raw ->
                     if (!dead && stamp == generation && requestId == evaluationId) {
-                        evaluating = false; observationRecovery.observed(); observe(raw)
+                        evaluating = false; observationTimeouts = 0; observe(raw)
                     }
                 }
             }
@@ -329,7 +307,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         val parent = web.parent as? FrameLayout
         val position = restorePosition ?: lastPosition
         val resume = wantsPlayback
-        generation++; evaluationId++; evaluating = false; backgroundObservationDeferred = false; observedAt = 0; observationRecovery.observed()
+        generation++; evaluationId++; evaluating = false; observedAt = 0; observationTimeouts = 0
         playing = false; pending = ""; updateWake(false)
         parent?.removeView(web)
         web.destroy()
@@ -374,7 +352,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         if (dead || queue.isEmpty()) return
         if (!filtersReady) { pendingNavigation = true; observed = "Preparing enforced browser filters"; publish(); return }
         pendingNavigation = false
-        browserNeedsReload = false; restorePosition = null; wantsPlayback = autoplay; observationRecovery.observed(); backgroundObservationDeferred = false
+        browserNeedsReload = false; restorePosition = null; wantsPlayback = autoplay; observationTimeouts = 0
         handledEnd=false;prepared=false;playbackError=null
         pending = ""; playing = false
         // Invalidate immediately: onPageStarted arrives later, after callers can inspect state.
@@ -488,7 +466,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         if (!::session.isInitialized) return
         val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_STOP or PlaybackState.ACTION_SEEK_TO or
             (if (canAdvance) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_PLAY_FROM_SEARCH or PlaybackState.ACTION_PREPARE_FROM_SEARCH or PlaybackState.ACTION_PLAY_FROM_MEDIA_ID or PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND
-        val fresh = playbackObservationFresh
+        val fresh = observedAt > 0 && SystemClock.elapsedRealtime() - observedAt <= 5000
         val state = if (!fresh) PlaybackState.STATE_NONE else if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
         val builder=PlaybackState.Builder().setActions(actions).setActiveQueueItemId(index.toLong()).setState(if(playbackError!=null)PlaybackState.STATE_ERROR else state,lastPosition,if(playing&&fresh)1f else 0f)
         playbackError?.let { builder.setErrorMessage(it) }
