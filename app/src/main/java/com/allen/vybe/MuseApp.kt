@@ -70,7 +70,7 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
     val play: (Track)->Unit={track ->
         val candidates=when { route.startsWith("playlist/")->vm.selected.value.tracks;route=="search"->vm.search.value.tracks;else->listOf(track) }
         val tracks=if(candidates.any { it.id==track.id })candidates else listOf(track)
-        vm.play(tracks,tracks.indexOfFirst { it.id==track.id }.coerceAtLeast(0));go("browser-player")
+        vm.play(tracks,tracks.indexOfFirst { it.id==track.id }.coerceAtLeast(0))
     }
     Box(Modifier.fillMaxSize()) {
         BrowserEngineHost(engine)
@@ -93,7 +93,7 @@ fun MuseApp(vm: MuseViewModel,onConnect: ()->Unit,onDisconnect: ()->Unit,incomin
                     route.startsWith("playlist/") -> {
                         val parts=route.split('/')
                         LaunchedEffect(route) {vm.select(parts.getOrElse(1){""},parts.getOrElse(2){"false"}=="true")}
-                        PlaylistScreen(vm,::back,{tracks,index,shuffle->vm.play(tracks,index,shuffle);go("browser-player")},{options=it},{go("search")})
+                        PlaylistScreen(vm,::back,{tracks,index,shuffle->vm.play(tracks,index,shuffle)},{options=it},{go("search")})
                     }
                     route=="browser-player" -> ConnectedBrowserPlayerScreen(engine,::back,{options=it},{go("queue")},vm,{adding=it})
                     route=="queue" -> MusicQueueScreen(engine,::back)
@@ -115,17 +115,20 @@ fun HomeScreen(vm: MuseViewModel,settings: ()->Unit,search: (String)->Unit,play:
     val recent by vm.recentSongs.collectAsStateWithLifecycle()
     val liked by vm.likedSongs.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
+    val recommendations by vm.music.recommendations.collectAsStateWithLifecycle()
+    LaunchedEffect(account.connected, recent.firstOrNull()?.id, liked.firstOrNull()?.id) {
+        if(account.connected)vm.music.refreshRecommendations(recent.firstOrNull() ?: liked.firstOrNull())
+    }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(bottom=20.dp),verticalAlignment=Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)){Text("VYBE",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Black);Text("A little space for sound.",color=Muted,style=MaterialTheme.typography.bodySmall)}
+                Text("VYBE",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Black)
                 ActionIcon(Icons.Rounded.Mic,"Voice assistant",click=voice)
                 ActionIcon(Icons.Rounded.Settings,"Settings",click=settings)
             }
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Brush.linearGradient(listOf(Color(0xFF284D3A),Color(0xFF152B25)))).padding(26.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
                 Text("PRESS PLAY ON SOMETHING GOOD",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)
                 Text("Your next\nfavourite.",style=MaterialTheme.typography.displaySmall,fontWeight=FontWeight.Bold)
-                Text("All the music you love. One place to listen.",color=Color(0xFFC0D4C8))
                 Button(onClick={search("")},contentPadding=PaddingValues(horizontal=22.dp,vertical=12.dp)){Icon(Icons.Rounded.Search,null);Spacer(Modifier.width(8.dp));Text("Find music")}
             }
         }
@@ -143,6 +146,21 @@ fun HomeScreen(vm: MuseViewModel,settings: ()->Unit,search: (String)->Unit,play:
         if(recent.isNotEmpty()) {
             item {SectionTitle("Back in rotation","Your recently played songs")}
             items(recent.take(8),key={it.id}){track->SavedTrackRow(vm,track,{play(track)},{more(track)})}
+        }
+        if(account.connected) {
+            item {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    Text("Made for your next play",Modifier.weight(1f),style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                    ActionIcon(Icons.Rounded.Refresh,"Refresh recommendations",enabled=!recommendations.loading) {
+                        vm.music.refreshRecommendations(recent.firstOrNull() ?: liked.firstOrNull(),true)
+                    }
+                }
+                if(recommendations.loading)LinearProgressIndicator(Modifier.fillMaxWidth())
+                if(recommendations.tracks.isEmpty()&&!recommendations.loading)Text(recommendations.message ?: "Listen to a song to find more music.",color=Muted,style=MaterialTheme.typography.bodySmall)
+            }
+            items(recommendations.tracks.take(8),key={"suggested-${it.id}"}) { track ->
+                SavedTrackRow(vm,track,{vm.play(recommendations.tracks,recommendations.tracks.indexOf(track))},{more(track)})
+            }
         }
         item {SectionTitle("Find your mood")}
         item {

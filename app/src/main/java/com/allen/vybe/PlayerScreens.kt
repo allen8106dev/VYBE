@@ -30,8 +30,8 @@ fun MusicQueueScreen(engine: BrowserPlaybackService?,back: ()->Unit) {
         item{PageTitle("Your queue","${songCount(player.count)} · Your listening session",back)}
         item {
             Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                FilterChip(player.shuffle,{engine?.command("shuffle")},label={Text("Shuffle")},leadingIcon={Icon(Icons.Rounded.Shuffle,null)})
-                FilterChip(player.repeat!=0,{engine?.command("repeat")},label={Text(when(player.repeat){1->"Repeat all";2->"Repeat one";else->"Repeat off"})},leadingIcon={Icon(if(player.repeat==2)Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,null)})
+                ActionIcon(Icons.Rounded.Shuffle,if(player.shuffle)"Disable shuffle" else "Enable shuffle",tint=if(player.shuffle)MaterialTheme.colorScheme.primary else Muted){engine?.command("shuffle")}
+                ActionIcon(if(player.repeat==2)Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,when(player.repeat){1->"Repeat all";2->"Repeat one";else->"Repeat off"},tint=if(player.repeat!=0)MaterialTheme.colorScheme.primary else Muted){engine?.command("repeat")}
             }
         }
         if(player.songs.isEmpty())item{EmptyState("Room for your next favourite","Use a song's menu to add it to your queue.")}

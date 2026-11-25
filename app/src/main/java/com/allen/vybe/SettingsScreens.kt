@@ -25,6 +25,7 @@ fun SettingsScreen(vm: MuseViewModel,back: ()->Unit,connect: ()->Unit,disconnect
     val account by vm.account.collectAsStateWithLifecycle()
     val player by BrowserPlaybackService.state.collectAsStateWithLifecycle()
     val engine by vm.music.engine.collectAsStateWithLifecycle()
+    val autoplay by vm.music.autoplay.collectAsStateWithLifecycle()
     var clear by rememberSaveable{mutableStateOf(false)}
     var signOut by rememberSaveable{mutableStateOf(false)}
     var timer by rememberSaveable{mutableStateOf(false)}
@@ -45,6 +46,7 @@ fun SettingsScreen(vm: MuseViewModel,back: ()->Unit,connect: ()->Unit,disconnect
         }
         item{SectionTitle("Playback")}
         item{SettingsGroup {
+            ListItem(headlineContent={Text("Autoplay")},supportingContent={Text("Continue with suggested songs when your queue ends")},leadingContent={Icon(Icons.Rounded.AutoAwesome,null)},trailingContent={Switch(autoplay,vm.music::setAutoplay)},colors=ListItemDefaults.colors(containerColor=androidx.compose.ui.graphics.Color.Transparent))
             ActionRow(Icons.Rounded.Bedtime,"Sleep timer"){timer=true}
             Text(if(player.sleepUntil>0)"Music pauses when your timer ends." else "Let the music fade into your night.",Modifier.padding(start=56.dp,end=18.dp,bottom=16.dp),style=MaterialTheme.typography.bodySmall,color=Muted)
         }}

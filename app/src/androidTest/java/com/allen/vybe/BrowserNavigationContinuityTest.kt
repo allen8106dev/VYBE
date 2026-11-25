@@ -42,6 +42,7 @@ class BrowserNavigationContinuityTest {
         }
         ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
             scenario.onActivity { activity ->
+                activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 // Invoke the exact UI callback without requiring a Google account or injecting OS taps.
                 MainActivity::class.java.getDeclaredMethod("playBrowser", List::class.java, Int::class.javaPrimitiveType).apply { isAccessible = true }
                     .invoke(activity, listOf(Track("aqz-KE-bpKQ", "Navigation soundcheck", "Blender Foundation", Source.YOUTUBE)), 0)
@@ -59,7 +60,7 @@ class BrowserNavigationContinuityTest {
                 ui.waitUntil(30000) { BrowserPlaybackService.latest.duration > 0 }
                 ins.runOnMainSync { engine!!.command("play") }
                 ui.waitUntil(15000) { BrowserPlaybackService.latest.playing }
-                click("Navigation soundcheck")
+                ui.onNode(hasContentDescription("Mini-player song artwork") and hasClickAction()).performSemanticsAction(SemanticsActions.OnClick) { it() }
                 ui.onNodeWithContentDescription("Back to library").assertExists()
                 Thread.sleep(4000); sample("nativePlayer")
                 ins.uiAutomation.takeScreenshot()?.let { bitmap ->

@@ -10,6 +10,9 @@ class MusePreferences(context: Context) {
     private val store = context.applicationContext.musePreferences
     private val motion = booleanPreferencesKey("reduced_motion")
     private val searches = stringPreferencesKey("recent_searches")
+    private val autoplayKey = booleanPreferencesKey("autoplay_suggestions")
+    val autoplay = store.data.map { it[autoplayKey] ?: true }
+    suspend fun autoplay(value: Boolean) { store.edit { it[autoplayKey] = value } }
     val reducedMotion = store.data.map { it[motion] ?: false }
     val recentSearches = store.data.map { it[searches].orEmpty().split('\n').filter(String::isNotBlank) }
     suspend fun reduceMotion(value: Boolean) { store.edit { it[motion] = value } }

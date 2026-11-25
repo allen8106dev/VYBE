@@ -45,4 +45,27 @@ class MusicQueueTest {
         assertEquals(songs,q.songs);assertFalse(q.select(5))
         q.replace((0..105).map {QueueSong("video"+it.toString().padStart(6,'0'),"Song")},0);assertEquals(100,q.songs.size)
     }
+    @Test fun suggestionsCannotJumpAheadOfUserSongsOrOverrideRepeat() {
+        val q=MusicQueue();q.replace(songs.take(2),0)
+        assertFalse(q.continueWith(songs[2]));assertEquals(songs[0],q.current)
+        q.select(1);q.setRepeat(1);assertFalse(q.continueWith(songs[2]))
+        q.setRepeat(2);assertFalse(q.continueWith(songs[2]))
+        q.setRepeat(0);assertTrue(q.continueWith(songs[2]))
+        assertEquals(songs.take(3),q.songs);assertEquals(songs[2],q.current)
+        assertTrue(q.previous());assertEquals(songs[1],q.current)
+    }
+    @Test fun longAutoplaySessionRetainsBoundedQueueAndPreviousSong() {
+        val all=(0..105).map { QueueSong("video"+it.toString().padStart(6,'0'),"Song $it") }
+        val q=MusicQueue();q.replace(all.take(100),99)
+        assertTrue(q.continueWith(all[100]));assertEquals(100,q.songs.size)
+        assertEquals(all[1],q.songs.first());assertEquals(all[100],q.current)
+        assertFalse(q.continueWith(all[100]));assertFalse(q.continueWith(QueueSong("bad","Bad")))
+        q.previous();assertEquals(all[99],q.current)
+        q.toggleShuffle();q.toggleShuffle();assertEquals(all[99],q.current)
+    }
+    @Test fun autoplayDoesNotLoseOriginalOrderWhenShuffleIsTurnedOff() {
+        val q=MusicQueue();q.replace(songs.take(4),0);q.toggleShuffle();q.select(3)
+        assertTrue(q.continueWith(songs[4]));q.toggleShuffle()
+        assertEquals(songs,q.songs);assertEquals(songs[4],q.current)
+    }
 }

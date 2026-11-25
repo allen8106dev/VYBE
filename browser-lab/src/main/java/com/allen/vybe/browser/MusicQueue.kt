@@ -64,5 +64,15 @@ class MusicQueue {
         return old==removed
     }
     fun clearUpcoming() { songs=songs.take(index+1);original=songs }
+    /** Only after the chosen queue ends; retain a bounded history for Previous. */
+    fun continueWith(song: QueueSong): Boolean {
+        if(songs.isEmpty() || index!=songs.lastIndex || repeat!=0 || song.id in ids || !song.id.matches(Regex("[A-Za-z0-9_-]{11}")))return false
+        if(songs.size==100){
+            val evicted=songs.first().id
+            songs=songs.drop(1);original=original.filterNot { it.id==evicted };index--
+        }
+        songs=songs+song;original=original+song;index=songs.lastIndex
+        return true
+    }
     fun clear() { songs=emptyList();original=emptyList();index=0 }
 }

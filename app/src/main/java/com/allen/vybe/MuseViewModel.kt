@@ -202,7 +202,7 @@ class MuseViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun like(track: Track) {music.like(track)}
     fun follow(name: String) = action { if (name in artists.value) dao.unfollow(name) else dao.follow(ArtistEntity(name)) }
-    fun clearHistory() = action { dao.clearHistory(); app.preferences.clearSearches(); notify("Listening and search history cleared.") }
+    fun clearHistory() = action { dao.clearHistory(); app.preferences.clearSearches(); music.clearRecommendations(); notify("Listening and search history cleared.") }
     fun reducedMotion(value: Boolean) { viewModelScope.launch { app.preferences.reduceMotion(value) } }
     fun play(tracks: List<Track>, index: Int = 0, shuffle: Boolean = false) { music.play(tracks,index,shuffle) }
     init {

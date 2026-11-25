@@ -88,6 +88,29 @@ class YouTubeRepository : MusicCatalogProvider, MusicSearchService, PlaylistRepo
     private fun thumbnail(snippet: JSONObject): String? = snippet.optJSONObject("thumbnails")?.let {
         (it.optJSONObject("high") ?: it.optJSONObject("medium") ?: it.optJSONObject("default"))?.optString("url")?.takeIf { url -> url.startsWith("https://") }
     }
+    suspend fun recommendations(seed: Track?): List<Track> {
+        val json=if(seed==null)request("videos",mapOf("part" to "snippet,contentDetails,status","chart" to "mostPopular","videoCategoryId" to "10","maxResults" to "20"))
+        else {
+            val found=request("search",mapOf("part" to "snippet","q" to RecommendationPolicy.query(seed),"type" to "video","videoCategoryId" to "10","videoEmbeddable" to "true","maxResults" to "20"))
+            val ids=found.optJSONArray("items").objects().mapNotNull { it.optJSONObject("id")?.optString("videoId") }.filter { it.matches(Regex("[A-Za-z0-9_-]{11}")) }
+            if(ids.isEmpty())return emptyList()
+            request("videos",mapOf("part" to "snippet,contentDetails,status","id" to ids.joinToString(",")))
+        }
+        val tracks=json.optJSONArray("items").objects().mapNotNull { item ->
+            val id=item.optString("id")
+            val snippet=item.optJSONObject("snippet") ?: return@mapNotNull null
+            if(!id.matches(Regex("[A-Za-z0-9_-]{11}")))return@mapNotNull null
+            val seconds=runCatching { java.time.Duration.parse(item.optJSONObject("contentDetails")?.optString("duration")).seconds }.getOrDefault(0)
+            if(seconds !in 60..900 || snippet.optString("liveBroadcastContent","none")!="none" || item.optJSONObject("status")?.optBoolean("embeddable")!=true)return@mapNotNull null
+            Track(id,clean(snippet.optString("title")),clean(snippet.optString("channelTitle")),artworkUri=thumbnail(snippet),channelId=snippet.optString("channelId"))
+        }
+        // Keep a discovery fallback when an artist's top results are already in the playlist.
+        // The whole bounded batch is cached; this chart call costs one API quota unit.
+        val discovery=if(seed==null)emptyList() else try { recommendations(null) }
+            catch(cancelled: kotlinx.coroutines.CancellationException){throw cancelled}
+            catch(_: Exception){emptyList()}
+        return (tracks+discovery).distinctBy { it.id }.take(40)
+    }
     private suspend fun withChannelImages(tracks: List<Track>): List<Track> {
         val images = mutableMapOf<String, String?>()
         try {

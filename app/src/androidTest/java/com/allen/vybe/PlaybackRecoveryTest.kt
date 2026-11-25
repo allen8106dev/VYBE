@@ -17,7 +17,7 @@ class PlaybackRecoveryTest {
     private fun await(message: String, condition: () -> Boolean) {
         val deadline = android.os.SystemClock.elapsedRealtime() + 30000
         while (!condition()) {
-            assertTrue(message, android.os.SystemClock.elapsedRealtime() < deadline)
+            assertTrue("$message: ${BrowserPlaybackService.latest}", android.os.SystemClock.elapsedRealtime() < deadline)
             Thread.sleep(100)
         }
     }
@@ -26,7 +26,9 @@ class PlaybackRecoveryTest {
         BrowserPlaybackService::class.java.getDeclaredField("web").apply { isAccessible = true }.get(engine) as WebView
 
     @Test fun backgroundRendererLossRetainsQueueAndRestoresControlsAfterReopen() {
+        foregroundTestApp()
         ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
+            scenario.onActivity { it.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             var engine: BrowserPlaybackService? = null
             instrumentation.runOnMainSync {
                 app.music.withEngine {
@@ -53,7 +55,9 @@ class PlaybackRecoveryTest {
                     BrowserPlaybackService.latest.let { it.playing && it.position >= 8000 && it.count == 1 && it.title == "Recovery first" }
                 }
                 assertSame("Controller lost the retained service", service, app.music.engine.value)
-                instrumentation.runOnMainSync { service.command("pause"); service.seek(16000) }
+                instrumentation.runOnMainSync { service.command("pause") }
+                await("Recovered pause did not work") { !BrowserPlaybackService.latest.playing }
+                instrumentation.runOnMainSync { service.seek(16000) }
                 await("Recovered seek/pause did not work") {
                     BrowserPlaybackService.latest.let { !it.playing && it.position in 15500..16500 }
                 }

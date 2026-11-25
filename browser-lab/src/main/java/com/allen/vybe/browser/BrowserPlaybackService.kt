@@ -67,6 +67,25 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var evaluationStarted = 0L
     private var observationTimeouts = 0
     private val musicQueue = MusicQueue()
+    var queueVersion = 0L; private set
+    private var autoplay = true
+    private var autoplaySuppressed = false
+    private var suggestedSongs = emptyList<QueueSong>()
+    private val canSuggest get() = autoplay && !autoplaySuppressed && musicQueue.repeat==0 && index==queue.lastIndex && suggestedSongs.any { it.id !in queue }
+    private val canAdvance get() = musicQueue.canNext || canSuggest
+    fun autoplay(enabled: Boolean) { autoplay=enabled;if(!enabled)suggestedSongs=emptyList();publish() }
+    fun offerSuggestions(version: Long,seedId: String,songs: List<QueueSong>) {
+        if(dead || version!=queueVersion || queue.getOrNull(index)!=seedId || !autoplay || autoplaySuppressed)return
+        suggestedSongs=songs.filter { it.id !in queue }.take(12)
+        if(!(handledEnd && wantsPlayback && !playing && advanceSuggestion()))publish()
+    }
+    private fun advanceSuggestion(): Boolean {
+        if(!canSuggest || !wantsPlayback)return false
+        val next=suggestedSongs.firstOrNull { it.id !in queue } ?: return false
+        if(!musicQueue.continueWith(next))return false
+        suggestedSongs=suggestedSongs.filterNot { it.id==next.id };queueVersion++
+        navigate();return true
+    }
     private val queue get() = musicQueue.ids
     private val index get() = musicQueue.index
     private val titles get() = musicQueue.names
@@ -85,7 +104,7 @@ class BrowserPlaybackService : MediaBrowserService() {
     private var pageTitle = ""
     private var duration = 0L
     private var playerActivity: Class<*> = BrowserPlaybackActivity::class.java
-    val snapshot get() = BrowserPlayerState(queue.getOrNull(index).orEmpty(), titles.getOrNull(index)?.takeIf { it.isNotBlank() } ?: pageTitle.ifBlank { "YouTube playback" }, artists.getOrNull(index).orEmpty(), playing && observedAt > 0 && SystemClock.elapsedRealtime() - observedAt <= 5000, lastPosition, duration, index, queue.size, diagnostics, musicQueue.names, artistImage, musicQueue.songs, musicQueue.shuffle, musicQueue.repeat, musicQueue.canNext, sleepUntil, playbackError)
+    val snapshot get() = BrowserPlayerState(queue.getOrNull(index).orEmpty(), titles.getOrNull(index)?.takeIf { it.isNotBlank() } ?: pageTitle.ifBlank { "YouTube playback" }, artists.getOrNull(index).orEmpty(), playing && observedAt > 0 && SystemClock.elapsedRealtime() - observedAt <= 5000, lastPosition, duration, index, queue.size, diagnostics, musicQueue.names, artistImage, musicQueue.songs, musicQueue.shuffle, musicQueue.repeat, canAdvance, sleepUntil, playbackError)
     fun playerActivity(activity: Class<*>) { playerActivity = activity }
     fun select(selected: Int) { if(musicQueue.select(selected)) navigate() }
     fun enqueue(song: QueueSong, next: Boolean = false) {
@@ -100,13 +119,14 @@ class BrowserPlaybackService : MediaBrowserService() {
     }
     fun move(from: Int,to: Int) { musicQueue.move(from,to);publish() }
     fun remove(at: Int) { val changed=musicQueue.remove(at);if(queue.isEmpty())command("stop") else if(changed)navigate() else publish() }
-    fun clearUpcoming() { musicQueue.clearUpcoming();publish() }
+    fun clearUpcoming() { musicQueue.clearUpcoming();autoplaySuppressed=true;suggestedSongs=emptyList();queueVersion++;publish() }
     fun sleep(minutes: Int) {
         handler.removeCallbacks(sleepAction);sleepUntil=if(minutes>0)SystemClock.elapsedRealtime()+minutes.coerceAtMost(180)*60000L else 0
         if(sleepUntil>0)handler.postDelayed(sleepAction,sleepUntil-SystemClock.elapsedRealtime());publish()
     }
     fun reportError(message: String?) { playbackError=message;publish() }
     fun prepareSongs(songs: List<QueueSong>) {
+        queueVersion++;suggestedSongs=emptyList();autoplaySuppressed=false
         wantsPlayback = false; restorePosition = null
         script("m.pause();");updateWake(false);generation++;evaluationId++;evaluating=false
         musicQueue.replace(songs,0);prepared=true;playing=false;lastPosition=0;duration=0;observedAt=SystemClock.elapsedRealtime();publish()
@@ -253,6 +273,7 @@ class BrowserPlaybackService : MediaBrowserService() {
                     blocked.incrementAndGet(); return response("text/plain", "", 403)
                 }
                 if (url == FIXTURE) return response("text/html", fixture())
+                if (page == FIXTURE && url == "https://muse.invalid/dawn.wav") return WebResourceResponse("audio/wav",null,assets.open("dawn.wav"))
                 if (request.url.host == "tracker.muse.invalid") return response("image/svg+xml", "<svg xmlns='http://www.w3.org/2000/svg'/>")
                 if (request.url.host != "appassets.androidplatform.net" && !request.isForMainFrame) {
                     val destination = request.requestHeaders.entries.firstOrNull { it.key.equals("Sec-Fetch-Dest", true) }?.value.orEmpty()
@@ -322,6 +343,7 @@ class BrowserPlaybackService : MediaBrowserService() {
     fun load(items: List<String>, selected: Int, names: List<String> = emptyList(), creators: List<String> = emptyList(), creatorImages: List<String> = emptyList()) {
         val valid = items.filter { it == "fixture" || it.matches(Regex("[A-Za-z0-9_-]{11}")) }.take(100)
         if (valid.isEmpty()) { observed = "Invalid video queue"; publish(); return }
+        queueVersion++;suggestedSongs=emptyList();autoplaySuppressed=false
         session.isActive = true; startForeground(440, notification())
         musicQueue.replace(valid.mapIndexed { n,id -> QueueSong(id,names.getOrNull(n)?.take(200).orEmpty().ifBlank { "YouTube song ${n+1}" },creators.getOrNull(n)?.take(150).orEmpty(),creatorImages.getOrNull(n)?.take(2048).orEmpty()) },selected)
         playbackError=null;prepared=false;navigate()
@@ -344,6 +366,7 @@ class BrowserPlaybackService : MediaBrowserService() {
         if (dead) return
         when(command) {
             "stop" -> {
+                queueVersion++;suggestedSongs=emptyList();autoplaySuppressed=false
                 wantsPlayback = false; restorePosition = null; browserNeedsReload = false
                 script("m.pause();"); web.stopLoading(); musicQueue.clear(); playing = false; pending = ""; pendingNavigation = false
                 handler.removeCallbacks(sleepAction);sleepUntil=0
@@ -353,7 +376,7 @@ class BrowserPlaybackService : MediaBrowserService() {
                 observed = "Stopped"; publish(); session.isActive = false
                 stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return
             }
-            "next" -> { if (musicQueue.next()) navigate() else { observed = "End of queue"; publish() }; return }
+            "next" -> { wantsPlayback=true;if (musicQueue.next()) navigate() else if(!advanceSuggestion()) { observed = "End of queue"; publish() }; return }
             "previous" -> { if(lastPosition>3000)seek(0) else if(musicQueue.previous())navigate();return }
             "shuffle" -> { musicQueue.toggleShuffle();publish();return }
             "repeat" -> { musicQueue.setRepeat((musicQueue.repeat+1)%3);publish();return }
@@ -362,6 +385,10 @@ class BrowserPlaybackService : MediaBrowserService() {
                 if (restorePosition != null) restorePlaying = true
                 if(queue.isEmpty()){reportError("Choose a song in VYBE to start listening.");return}
                 session.isActive=true;startForeground(440,notification())
+                if(handledEnd && musicQueue.repeat!=2) {
+                    if(musicQueue.next(true)){navigate();return}
+                    if(advanceSuggestion())return
+                }
                 if(prepared || browserNeedsReload){navigate();return}
                 script("m.muted=false;m.volume=1;m.play().catch(()=>{});")
             }
@@ -419,8 +446,11 @@ class BrowserPlaybackService : MediaBrowserService() {
             if(playing)musicQueue.current?.let { songObserved?.invoke(it) }
             if(data.optBoolean("ended")&&!handledEnd){
                 handledEnd=true
-                if(musicQueue.repeat==2){script("m.currentTime=0;m.play().catch(()=>{});")}
-                else if(musicQueue.next(true))navigate()
+                if(wantsPlayback) {
+                    if(musicQueue.repeat==2){script("m.currentTime=0;m.play().catch(()=>{});")}
+                    else if(musicQueue.next(true))navigate()
+                    else advanceSuggestion()
+                }
             } else if(!data.optBoolean("ended"))handledEnd=false
         } catch (_: Exception) { observed = "Browser observation unavailable"; publish() }
     }
@@ -435,7 +465,7 @@ class BrowserPlaybackService : MediaBrowserService() {
     private fun publish() {
         if (!::session.isInitialized) return
         val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_STOP or PlaybackState.ACTION_SEEK_TO or
-            (if (musicQueue.canNext) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_PLAY_FROM_SEARCH or PlaybackState.ACTION_PREPARE_FROM_SEARCH or PlaybackState.ACTION_PLAY_FROM_MEDIA_ID or PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND
+            (if (canAdvance) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_PLAY_FROM_SEARCH or PlaybackState.ACTION_PREPARE_FROM_SEARCH or PlaybackState.ACTION_PLAY_FROM_MEDIA_ID or PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND
         val fresh = observedAt > 0 && SystemClock.elapsedRealtime() - observedAt <= 5000
         val state = if (!fresh) PlaybackState.STATE_NONE else if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
         val builder=PlaybackState.Builder().setActions(actions).setActiveQueueItemId(index.toLong()).setState(if(playbackError!=null)PlaybackState.STATE_ERROR else state,lastPosition,if(playing&&fresh)1f else 0f)
@@ -499,7 +529,8 @@ class BrowserPlaybackService : MediaBrowserService() {
         stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy()
     }
     private fun response(mime: String, body: String, code: Int = 200) = WebResourceResponse(mime, "UTF-8", code, if(code==200) "OK" else "Blocked", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(body.toByteArray()))
-    private fun fixture(): String = """<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><style>${filter.css(FIXTURE)}</style><body><h2>Browser media fixture</h2><p>Original WAV through HTML audio, separate from native Media3. Press Play below.</p><audio controls loop src="https://appassets.androidplatform.net/assets/dawn.wav"></audio><div class="lab-ad">COSMETIC FILTER FAILED if visible</div><img src="https://tracker.muse.invalid/blocked.png"><img src="https://tracker.muse.invalid/allowed.png"><script src="https://securepubads.g.doubleclick.net/gampad/ads?vybe_lab=1"></script><p id="scriptlet">Scriptlets are not loaded.</p></body></html>"""
+    // A local Blob makes the 32-second test WAV seekable without AssetLoader range support.
+    private fun fixture(): String = """<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1"><style>${filter.css(FIXTURE)}</style><body><h2>Browser media fixture</h2><p>Original WAV through HTML audio, separate from native Media3. Press Play below.</p><audio controls loop></audio><script>fetch('https://muse.invalid/dawn.wav').then(r=>r.blob()).then(b=>{document.querySelector('audio').src=URL.createObjectURL(b)});</script><div class="lab-ad">COSMETIC FILTER FAILED if visible</div><img src="https://tracker.muse.invalid/blocked.png"><img src="https://tracker.muse.invalid/allowed.png"><script src="https://securepubads.g.doubleclick.net/gampad/ads?vybe_lab=1"></script><p id="scriptlet">Scriptlets are not loaded.</p></body></html>"""
     companion object {
         private val mutablePlayer = MutableStateFlow(BrowserPlayerState())
         val state = mutablePlayer.asStateFlow()

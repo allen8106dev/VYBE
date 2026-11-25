@@ -58,7 +58,10 @@ fun RemoteArtwork(url: String, description: String, modifier: Modifier = Modifie
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                     require(bounds.outWidth in 1..8192 && bounds.outHeight in 1..8192)
                     val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / targetPixels.coerceIn(64, 1024)).coerceAtLeast(1) }
-                    requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)).also { artworkCache.put(cacheKey, it) }
+                    val decoded = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options))
+                    val image = if(uri.host == "i.ytimg.com") trimThumbnailBars(decoded) else decoded
+                    if(image !== decoded)decoded.recycle()
+                    image.also { artworkCache.put(cacheKey, it) }
                 }
             }.getOrNull()
             }
@@ -66,6 +69,21 @@ fun RemoteArtwork(url: String, description: String, modifier: Modifier = Modifie
     }
     if(bitmap != null) Image(bitmap!!.asImageBitmap(), description, modifier, contentScale = ContentScale.Crop)
     else Icon(Icons.Rounded.MusicNote, description, modifier.background(Color(0xFF244936)))
+}
+
+/** Inspect only a small border sample, once on the image worker, before caching. */
+internal fun trimThumbnailBars(bitmap: Bitmap): Bitmap {
+    if(bitmap.width <= bitmap.height || bitmap.height < 16)return bitmap
+    fun darkRow(y: Int): Boolean = (1..16).count { n ->
+        val pixel=bitmap.getPixel((n*bitmap.width/17).coerceAtMost(bitmap.width-1),y)
+        android.graphics.Color.red(pixel)<24 && android.graphics.Color.green(pixel)<24 && android.graphics.Color.blue(pixel)<24
+    } >= 15
+    var border=0
+    val limit=bitmap.height/4
+    while(border<limit && darkRow(border) && darkRow(bitmap.height-1-border))border++
+    // Ignore a thin compression edge; avoid zooming genuinely dark artwork.
+    if(border<bitmap.height/24 || border==limit)return bitmap
+    return Bitmap.createBitmap(bitmap,0,border,bitmap.width,bitmap.height-2*border)
 }
 
 fun youtubeArtwork(id: String) = if(id.matches(Regex("[A-Za-z0-9_-]{11}"))) "https://i.ytimg.com/vi/$id/hqdefault.jpg" else ""

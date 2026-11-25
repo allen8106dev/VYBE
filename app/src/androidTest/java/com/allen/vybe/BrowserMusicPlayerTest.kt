@@ -32,7 +32,8 @@ class BrowserMusicPlayerTest {
             ActivityScenario.launch<BrowserMusicActivity>(Intent(ctx, BrowserMusicActivity::class.java)
                 .putStringArrayListExtra("queue", arrayListOf("fixture", "fixture"))
                 .putStringArrayListExtra("titles", arrayListOf("VYBE browser soundcheck", "Second soundcheck"))
-                .putStringArrayListExtra("artists", arrayListOf("Original test audio", "Original test audio"))).use {
+                .putStringArrayListExtra("artists", arrayListOf("Original test audio", "Original test audio"))).use { scenario ->
+                scenario.onActivity { it.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
                 ctx.bindService(Intent(ctx, BrowserPlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
                 assertTrue(bound.await(10, TimeUnit.SECONDS))
                 try {

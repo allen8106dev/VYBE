@@ -11,12 +11,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.allen.vybe.browser.*
@@ -95,6 +99,7 @@ fun BrowserPlayerScreen(engine: BrowserPlaybackService?, player: BrowserPlayerSt
         var showQueue by remember { mutableStateOf(false) }
         var showDetails by remember { mutableStateOf(false) }
         var showTimer by remember { mutableStateOf(false) }
+        var showLyrics by rememberSaveable { mutableStateOf(false) }
         var drag by remember(player.videoId) { mutableStateOf<Float?>(null) }
         var lines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
         var lyricError by remember { mutableStateOf<String?>(null) }
@@ -153,15 +158,18 @@ fun BrowserPlayerScreen(engine: BrowserPlaybackService?, player: BrowserPlayerSt
                         ActionIcon(if(player.repeat==2)Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,"Repeat mode: ${when(player.repeat){1->"all";2->"one";else->"off"}}",tint=if(player.repeat!=0)MaterialTheme.colorScheme.primary else Muted) { engine?.command("repeat") }
                     }
                     Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-                        TextButton(onClick={if(openQueue!=null)openQueue() else showQueue=true}){Icon(Icons.AutoMirrored.Rounded.QueueMusic,null);Spacer(Modifier.width(6.dp));Text("Queue · ${player.count}")}
-                        TextButton(onClick={showTimer=true}){Icon(Icons.Rounded.Bedtime,null);Spacer(Modifier.width(6.dp));Text(if(player.sleepUntil>0)"Timer on" else "Sleep timer")}
+                        ActionIcon(Icons.AutoMirrored.Rounded.QueueMusic,"Open queue, ${player.count} songs"){if(openQueue!=null)openQueue() else showQueue=true}
+                        ActionIcon(Icons.Rounded.Bedtime,if(player.sleepUntil>0)"Sleep timer on" else "Sleep timer",tint=if(player.sleepUntil>0)MaterialTheme.colorScheme.primary else Muted){showTimer=true}
                     }
                     player.error?.let { Text(it,color=MaterialTheme.colorScheme.error);TextButton(onClick={engine?.command("play")}){Text("Try playback again")} }
                 }
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF244936))) {
                         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("Lyrics", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                                Text("Lyrics",Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                ActionIcon(Icons.Rounded.Fullscreen,"Open full-screen lyrics"){showLyrics=true}
+                            }
                             if(lines.isEmpty()) Text(plainLyrics.ifBlank { lyricSource }, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             else {
                                 val active = lines.indexOfLast { it.at <= player.position }
@@ -175,7 +183,6 @@ fun BrowserPlayerScreen(engine: BrowserPlaybackService?, player: BrowserPlayerSt
                         }
                     }
                 }
-                item { Text("${player.index + 1} of ${player.count} · YouTube", color = Muted, style = MaterialTheme.typography.bodySmall) }
             }
         }
         if(showQueue) AlertDialog(onDismissRequest = { showQueue = false }, title = { Text("Up next") }, text = {
@@ -185,6 +192,33 @@ fun BrowserPlayerScreen(engine: BrowserPlaybackService?, player: BrowserPlayerSt
         }, confirmButton = { TextButton(onClick = { showQueue = false }) { Text("Done") } })
         if(showDetails) AlertDialog(onDismissRequest = { showDetails = false }, title = { Text("Playback details") }, text = { Text(player.status) }, confirmButton = { TextButton(onClick = { showDetails = false }) { Text("Done") } })
         if(showTimer)SleepTimerDialog(player.sleepUntil,{showTimer=false}){engine?.sleep(it);showTimer=false}
+        if(showLyrics)FullScreenLyrics(player.title,player.artist,lines,plainLyrics,lyricSource,player.position){showLyrics=false}
+}
+
+@Composable
+fun FullScreenLyrics(title: String,artist: String,lines: List<LyricLine>,plain: String,source: String,position: Long,dismiss: ()->Unit) {
+    val paragraphs=remember(plain){plain.lines()}
+    val active=remember(lines,position){lines.indexOfLast { it.at<=position }}
+    Dialog(onDismissRequest=dismiss,properties=DialogProperties(usePlatformDefaultWidth=false,decorFitsSystemWindows=false)) {
+        Surface(Modifier.fillMaxSize(),color=MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal=24.dp)) {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(vertical=16.dp)) {
+                        Text(title,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        Text(artist,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
+                    ActionIcon(Icons.Rounded.Close,"Close full-screen lyrics",click=dismiss)
+                }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(22.dp),contentPadding=PaddingValues(vertical=24.dp)) {
+                    if(lines.isNotEmpty())itemsIndexed(lines) { index,line ->
+                        Text(line.text,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold,color=if(index==active)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    } else if(plain.isNotBlank())items(paragraphs){Text(it,style=MaterialTheme.typography.headlineSmall)}
+                    else item{Text(source,color=Muted)}
+                    if(lines.isNotEmpty()||plain.isNotBlank())item{Text(source,color=Muted,style=MaterialTheme.typography.bodySmall)}
+                }
+            }
+        }
+    }
 }
 
 

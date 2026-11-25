@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.allen.vybe.browser.*
 import com.allen.vybe.data.SongEntity
+import com.allen.vybe.catalog.SongRecommendations
 import com.allen.vybe.domain.*
 import com.google.android.gms.auth.api.identity.*
 import com.google.android.gms.common.api.Scope
@@ -18,6 +19,25 @@ import kotlinx.coroutines.tasks.await
 /** One application-owned connection; navigation never replaces the browser. */
 class MusicController(private val app: MuseApplication) {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
+    private val suggestionSource=SongRecommendations(app.youtube)
+    private val mutableRecommendations=MutableStateFlow(RecommendationState())
+    val recommendations=mutableRecommendations.asStateFlow()
+    val autoplay=app.preferences.autoplay.stateIn(scope,SharingStarted.Eagerly,true)
+    private var recommendationsJob: Job?=null
+    fun setAutoplay(enabled: Boolean) { scope.launch { app.preferences.autoplay(enabled) } }
+    fun refreshRecommendations(seed: Track?,refresh: Boolean=false) {
+        if(!refresh && recommendationsJob?.isActive==true)return
+        recommendationsJob?.cancel()
+        recommendationsJob=scope.launch {
+            mutableRecommendations.value=mutableRecommendations.value.copy(loading=true,message=null)
+            try {
+                val recent=app.database.library().recentSongs().first().map { it.track() }
+                val tracks=suggestionSource.songs(seed,recent+listOfNotNull(seed),refresh).filterNot { it.id in favourites.value }
+                mutableRecommendations.value=RecommendationState(tracks,message=if(tracks.isEmpty())"No new suggestions yet. Try another artist." else null)
+            } catch(cancelled: CancellationException){throw cancelled}
+            catch(_: Exception){mutableRecommendations.value=mutableRecommendations.value.copy(loading=false,message="Suggestions are unavailable. Try again later.")}
+        }
+    }
     private val mutableEngine=MutableStateFlow<BrowserPlaybackService?>(null)
     val engine=mutableEngine.asStateFlow()
     val currentSongId=BrowserPlaybackService.state.map{it.videoId}.distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,"")
@@ -54,6 +74,7 @@ class MusicController(private val app: MuseApplication) {
         override fun onServiceConnected(name: ComponentName,binder: IBinder) {
             val service=(binder as BrowserPlaybackService.LocalBinder).service
             service.playerActivity(MainActivity::class.java);mutableEngine.value=service
+            service.autoplay(autoplay.value)
             val work=pending.toList();pending.clear();work.forEach { it(service) }
         }
         // Android retains this binding and reconnects it after an unexpected process loss.
@@ -71,6 +92,26 @@ class MusicController(private val app: MuseApplication) {
         if(binding){binding=false;app.unbindService(connection)}
     }
     init {
+        scope.launch { autoplay.collect { enabled -> mutableEngine.value?.autoplay(enabled) } }
+        scope.launch {
+            val seeds=BrowserPlaybackService.state.map {
+                AutoplaySeed(it.videoId,it.songs,it.index,it.repeat,it.duration>0)
+            }.distinctUntilChanged()
+            combine(engine,seeds,autoplay) { service,seed,enabled -> Triple(service,seed,enabled) }.collectLatest { (service,seed,enabled) ->
+                if(service==null || !enabled || seed.id=="fixture" || !seed.ready || seed.index!=seed.songs.lastIndex || seed.repeat!=0 || seed.id.isBlank())return@collectLatest
+                val version=service.queueVersion
+                try {
+                    // Let track startup and artwork requests settle before discovery work.
+                    delay(1500)
+                    if(!app.youtube.connected)return@collectLatest
+                    val current=seed.songs.getOrNull(seed.index)?.track() ?: return@collectLatest
+                    val recent=app.database.library().recentSongs().first().map { it.track() }
+                    val tracks=suggestionSource.songs(current,recent+seed.songs.map { it.track() })
+                    service.offerSuggestions(version,seed.id,tracks.map { QueueSong(it.id,it.title,it.artist,it.artistArtworkUri.orEmpty()) })
+                } catch(cancelled: CancellationException){throw cancelled}
+                catch(_: Exception){ /* Discovery must never interrupt the user's queue. */ }
+            }
+        }
         BrowserPlaybackService.searchRequest={service,query,play -> search(query,play,service)}
         BrowserPlaybackService.taskRemoved={service ->
             searchJob?.cancel();mutableRequestedSearch.value=null;pending.clear()
@@ -91,7 +132,14 @@ class MusicController(private val app: MuseApplication) {
         }
     }
     fun clearMessage() { mutableMessage.value=null }
-    fun disconnect() {searchJob?.cancel();mutableRequestedSearch.value=null}
+    fun disconnect() {
+        searchJob?.cancel();mutableRequestedSearch.value=null
+        clearRecommendations()
+    }
+    fun clearRecommendations() {
+        recommendationsJob?.cancel();suggestionSource.clear();mutableRecommendations.value=RecommendationState()
+        mutableEngine.value?.let { it.offerSuggestions(it.queueVersion,BrowserPlaybackService.latest.videoId,emptyList()) }
+    }
     fun withEngine(action: (BrowserPlaybackService)->Unit) {
         mutableEngine.value?.let { action(it);return }
         pending+=action
@@ -186,3 +234,6 @@ class MusicController(private val app: MuseApplication) {
 }
 
 fun QueueSong.track()=Track(id,title,artist,Source.YOUTUBE,artworkUri=youtubeArtwork(id),artistArtworkUri=artistImage.ifBlank { null })
+
+data class RecommendationState(val tracks: List<Track> = emptyList(),val loading: Boolean=false,val message: String?=null)
+private data class AutoplaySeed(val id: String,val songs: List<QueueSong>,val index: Int,val repeat: Int,val ready: Boolean)
